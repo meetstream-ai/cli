@@ -9,6 +9,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
 	"github.com/meetstream-ai/cli/internal/agentkit/alerts"
 	"github.com/meetstream-ai/cli/internal/agentkit/bridge"
+	"github.com/meetstream-ai/cli/internal/agentkit/checks"
 	kitconfig "github.com/meetstream-ai/cli/internal/agentkit/config"
 	"github.com/meetstream-ai/cli/internal/agentkit/localapps"
 	"github.com/meetstream-ai/cli/internal/agentkit/meetingctx"
@@ -34,7 +35,7 @@ func newAgentCmd(info BuildInfo) *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "Run your own agent CLI in MIA meetings", GroupID: "agent"}
 	setup := newAgentSetupCmd(info)
 	cmd.AddCommand(newAgentServeCmd(info), newAgentContextCmd(), setup, newAgentStdioCmd(),
-		newAgentLoginCmd(info), newAgentLogoutCmd(), newAgentStatusCmd())
+		newAgentLoginCmd(info), newAgentLogoutCmd(), newAgentStatusCmd(), newAgentBenchCmd(info))
 	return cmd
 }
 func newAgentStdioCmd() *cobra.Command {
@@ -91,7 +92,12 @@ func (o agentServeOptions) build() (kitconfig.Config, error) {
 	}
 	binary, err = exec.LookPath(meetingctx.Expand(binary))
 	if err != nil {
-		return kitconfig.Config{}, usageErr("agent CLI is not installed", a.InstallHint)
+		// Installed where PATH does not look yet (e.g. ~/.local/bin): use that path.
+		found, _ := checks.ResolveBinary(agentEnv(), a, o.binary)
+		if found == "" {
+			return kitconfig.Config{}, usageErr("agent CLI is not installed", a.InstallHint)
+		}
+		binary = found
 	}
 	binary, err = filepath.Abs(binary)
 	if err != nil {
@@ -168,6 +174,9 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 			}
 			if !fl.Changed("model") && saved.Model != "" {
 				o.model = saved.Model
+			}
+			if !fl.Changed("effort") && saved.Effort != "" {
+				o.effort = saved.Effort
 			}
 		}
 		c, err := o.build()

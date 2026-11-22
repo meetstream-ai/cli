@@ -21,6 +21,10 @@ import (
 
 const backLabel = "← Back"
 
+// backDetail is the Back row's own detail line. Every row has one, the Back row
+// included (the kit's menu crashed once looking up a detail for it).
+const backDetail = "Return to the previous question."
+
 type menuResult int
 
 const (
@@ -30,11 +34,17 @@ const (
 	menuQuit
 )
 
-// stepMenuModel asks one question at steps 2 and 3. Esc (or the "← Back" row)
-// goes back to the previous step; ctrl+c or q cancels setup.
+// runTea runs a Bubble Tea model at the terminal. Tests swap it to drive the
+// models with key messages, so every step can be walked without a terminal.
+var runTea = func(m tea.Model) (tea.Model, error) { return tea.NewProgram(m).Run() }
+
+// stepMenuModel asks one question in a setup step. Esc (or the "← Back" row)
+// goes back to the previous question; ctrl+c or q cancels setup.
 type stepMenuModel struct {
 	question string
 	options  []string // without the Back row; it is always last
+	hints    []string // dim text beside a row (optional)
+	details  []string // the line under the menu for the highlighted row (optional)
 	cursor   int
 	result   menuResult
 	chosen   int
@@ -44,7 +54,33 @@ func newStepMenu(question string, options ...string) stepMenuModel {
 	return stepMenuModel{question: question, options: options}
 }
 
+// withHints sets the dim text beside each row.
+func (m stepMenuModel) withHints(hints []string) stepMenuModel { m.hints = hints; return m }
+
+// withDetails sets the line shown under the menu for each row; the Back row
+// always has backDetail.
+func (m stepMenuModel) withDetails(details []string) stepMenuModel { m.details = details; return m }
+
+// at starts the cursor on row i.
+func (m stepMenuModel) at(i int) stepMenuModel {
+	if i >= 0 && i < m.rows() {
+		m.cursor = i
+	}
+	return m
+}
+
 func (m stepMenuModel) rows() int { return len(m.options) + 1 }
+
+// detail is the highlighted row's detail line, "" when it has none.
+func (m stepMenuModel) detail(i int) string {
+	switch {
+	case i == len(m.options):
+		return backDetail
+	case i < len(m.details):
+		return m.details[i]
+	}
+	return ""
+}
 
 func (m stepMenuModel) Init() tea.Cmd { return nil }
 
@@ -79,6 +115,10 @@ func (m stepMenuModel) View() string {
 	var b strings.Builder
 	b.WriteString("\n  " + ui.BoldStyle.Render(m.question) + "\n\n")
 	sel := lipgloss.NewStyle().Foreground(ui.Orange).Bold(true)
+	width := 0
+	for _, o := range m.options {
+		width = max(width, lipgloss.Width(o))
+	}
 	for i, label := range append(append([]string{}, m.options...), backLabel) {
 		pointer, title := "  ", label
 		if i == len(m.options) {
@@ -87,20 +127,199 @@ func (m stepMenuModel) View() string {
 		if i == m.cursor {
 			pointer, title = sel.Render("❯ "), sel.Render(label)
 		}
-		fmt.Fprintf(&b, "  %s%s\n", pointer, title)
+		line := "  " + pointer + title
+		if i < len(m.hints) && m.hints[i] != "" {
+			// lipgloss.Width ignores colour codes, so styled rows line up.
+			line += strings.Repeat(" ", max(0, width-lipgloss.Width(label))) + "  " + ui.DimStyle.Render(m.hints[i])
+		}
+		b.WriteString(line + "\n")
+	}
+	if d := m.detail(m.cursor); d != "" {
+		// Wrapped, so a long detail line never widens the menu.
+		for _, l := range strings.Split(lipgloss.NewStyle().Width(96).Render(d), "\n") {
+			b.WriteString("\n  " + ui.DimStyle.Render(strings.TrimRight(l, " ")))
+		}
+		b.WriteString("\n")
 	}
 	b.WriteString("\n  " + ui.DimStyle.Render("↑/↓ move · enter choose · esc back · q quit") + "\n")
 	return b.String()
 }
 
-// askStep runs a step menu at the terminal.
-func askStep(question string, options ...string) (menuResult, int, error) {
-	final, err := tea.NewProgram(newStepMenu(question, options...)).Run()
+// ask runs a step menu at the terminal.
+func ask(m stepMenuModel) (menuResult, int, error) {
+	final, err := runTea(m)
 	if err != nil {
 		return menuQuit, 0, err
 	}
-	m := final.(stepMenuModel)
-	return m.result, m.chosen, nil
+	sm := final.(stepMenuModel)
+	return sm.result, sm.chosen, nil
+}
+
+// askStep runs a plain step menu at the terminal.
+func askStep(question string, options ...string) (menuResult, int, error) {
+	return ask(newStepMenu(question, options...))
+}
+
+// ── tick list: several choices plus "← Back" ──────────────────────────────────
+
+// checklistModel picks several rows: space ticks, enter confirms, Esc (or the
+// Back row) goes back, q or ctrl+c cancels setup.
+type checklistModel struct {
+	question string
+	options  []string
+	hints    []string
+	ticked   []bool
+	cursor   int
+	result   menuResult
+}
+
+func newChecklist(question string, options, hints []string, ticked []int) checklistModel {
+	m := checklistModel{question: question, options: options, hints: hints, ticked: make([]bool, len(options))}
+	for _, i := range ticked {
+		if i >= 0 && i < len(options) {
+			m.ticked[i] = true
+		}
+	}
+	return m
+}
+
+func (m checklistModel) rows() int { return len(m.options) + 1 }
+
+// picked are the ticked rows, in order.
+func (m checklistModel) picked() []int {
+	var out []int
+	for i, t := range m.ticked {
+		if t {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func (m checklistModel) Init() tea.Cmd { return nil }
+
+func (m checklistModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "ctrl+c", "q":
+		m.result = menuQuit
+		return m, tea.Quit
+	case "esc", "left", "h":
+		m.result = menuBack
+		return m, tea.Quit
+	case "up", "k":
+		m.cursor = (m.cursor - 1 + m.rows()) % m.rows()
+	case "down", "j", "tab":
+		m.cursor = (m.cursor + 1) % m.rows()
+	case " ", "x":
+		if m.cursor < len(m.options) {
+			m.ticked[m.cursor] = !m.ticked[m.cursor]
+		}
+	case "enter":
+		if m.cursor == len(m.options) {
+			m.result = menuBack
+		} else {
+			m.result = menuChosen
+		}
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m checklistModel) View() string {
+	var b strings.Builder
+	b.WriteString("\n  " + ui.BoldStyle.Render(m.question) + "\n\n")
+	sel := lipgloss.NewStyle().Foreground(ui.Orange).Bold(true)
+	for i, label := range append(append([]string{}, m.options...), backLabel) {
+		pointer, box := "  ", ""
+		if i < len(m.options) {
+			box = "[ ] "
+			if m.ticked[i] {
+				box = "[" + lipgloss.NewStyle().Foreground(ui.Green).Render("x") + "] "
+			}
+		}
+		title := label
+		if i == len(m.options) {
+			title = ui.DimStyle.Render(label)
+		}
+		if i == m.cursor {
+			pointer, title = sel.Render("❯ "), sel.Render(label)
+		}
+		line := "  " + pointer + box + title
+		if i < len(m.hints) && m.hints[i] != "" {
+			line += "  " + ui.DimStyle.Render(m.hints[i])
+		}
+		b.WriteString(line + "\n")
+	}
+	if m.cursor == len(m.options) {
+		b.WriteString("\n  " + ui.DimStyle.Render(backDetail) + "\n")
+	}
+	b.WriteString("\n  " + ui.DimStyle.Render("↑/↓ move · space tick · enter measure · esc back · q quit") + "\n")
+	return b.String()
+}
+
+// ── text prompt with Esc for Back ──────────────────────────────────────────────
+
+// textPromptModel reads one line. Enter keeps the typed text (or the default),
+// Esc goes back, ctrl+c cancels setup.
+type textPromptModel struct {
+	question, value, fallback string
+	result                    menuResult
+}
+
+func (m textPromptModel) Init() tea.Cmd { return nil }
+
+func (m textPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.Type {
+	case tea.KeyCtrlC:
+		m.result = menuQuit
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.result = menuBack
+		return m, tea.Quit
+	case tea.KeyEnter:
+		m.result = menuChosen
+		if strings.TrimSpace(m.value) == "" {
+			m.value = m.fallback
+		}
+		m.value = strings.TrimSpace(m.value)
+		return m, tea.Quit
+	case tea.KeyBackspace:
+		if r := []rune(m.value); len(r) > 0 {
+			m.value = string(r[:len(r)-1])
+		}
+	case tea.KeySpace:
+		m.value += " "
+	case tea.KeyRunes:
+		m.value += string(k.Runes)
+	}
+	return m, nil
+}
+
+func (m textPromptModel) View() string {
+	shown := m.value
+	if shown == "" && m.fallback != "" {
+		shown = ui.DimStyle.Render(m.fallback)
+	}
+	return "\n  " + ui.BoldStyle.Render(m.question) + "\n\n  " + lipgloss.NewStyle().Foreground(ui.Orange).Render("❯ ") + shown + "█\n\n  " +
+		ui.DimStyle.Render("enter keep · esc back · ctrl+c quit") + "\n"
+}
+
+// askText runs a text prompt at the terminal.
+func askText(question, fallback string) (menuResult, string, error) {
+	final, err := runTea(textPromptModel{question: question, fallback: fallback})
+	if err != nil {
+		return menuQuit, "", err
+	}
+	m := final.(textPromptModel)
+	return m.result, m.value, nil
 }
 
 // ── install offer (the kit's _offer_install) ──────────────────────────────────
@@ -203,6 +422,13 @@ func (in installer) offer(spec agents.Spec) string {
 // confirm asks a [Y/n] question. Enter means yes; end of input means no, so
 // nothing is installed without an answer.
 func confirm(r io.Reader, question string) bool {
+	yes, _ := confirmEnded(r, question)
+	return yes
+}
+
+// confirmEnded is confirm that also reports whether input ended, so a caller
+// that retries never loops on a default answer.
+func confirmEnded(r io.Reader, question string) (yes, ended bool) {
 	for {
 		fmt.Fprint(ui.Out, "\n  "+question+" [Y/n] ")
 		ans, err := readLine(r)
@@ -210,15 +436,15 @@ func confirm(r io.Reader, question string) bool {
 		switch {
 		case ans == "" && err != nil:
 			fmt.Fprintln(ui.Out)
-			return false
+			return false, true
 		case ans == "" || ans == "y" || ans == "yes":
-			return true
+			return true, err != nil
 		case ans == "n" || ans == "no":
-			return false
+			return false, err != nil
 		}
 		ui.Note("Please answer y or n.")
 		if err != nil {
-			return false
+			return false, true
 		}
 	}
 }

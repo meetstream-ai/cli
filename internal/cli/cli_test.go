@@ -19,6 +19,7 @@ func run(t *testing.T, env map[string]string, args ...string) (string, int) {
 	t.Helper()
 	t.Setenv("MEETSTREAM_CONFIG_DIR", t.TempDir())
 	t.Setenv("MEETSTREAM_API_KEY", "")
+	isolateAgentLookup(t)
 	for k, v := range env {
 		t.Setenv(k, v)
 	}

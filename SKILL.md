@@ -20,7 +20,7 @@ One binary. Install: `npx @meetstream/cli`, `uvx meetstream` or `brew install me
 
 | Command | JSON shape |
 |---|---|
-| `meetstream doctor --json` | `{"ok": bool, "version": str, "checks": [{"name","ok","detail","fix"}]}` |
+| `meetstream doctor --json [--agent <name>] [--no-warm]` | `{"ok": bool, "version": str, "verdict": str, "checks": [{"name","ok","status": "ok"\|"warn"\|"fail","detail","fix"}]}`. API key lines first, then the agent checks (`config`, `workdir`, `agent`, `app`, `login`, `warm`, `relay`, `context`). Exit 1 when a check fails, 2 when no API key is set |
 | `meetstream login --json` | Opens the browser; the user signs in. `{"signed_in": true, "key": "ms_…abcd", "key_name", "config_path", "validated": bool, "bots_on_account", "env_overrides": bool}` |
 | `meetstream auth status --json` | `{"signed_in": bool, "source": "env"\|"file"\|"", "key": "ms_…abcd", "key_name": str, "config_path": str, "valid": bool, "bots_on_account": str}`; `--offline` skips the API check |
 | `meetstream auth logout --json` | `{"removed": bool}` |
@@ -79,7 +79,9 @@ Errors (with `--json`): `{"error": {"message": str, "hint": str, "exit_code": in
 
 ## Your own agent in meetings
 
-- `meetstream setup --agent claude --access readonly --no-start --json` → `{"agent","device_id","agent_config_id","access","workdir"}`. Under `--no-input`, run `meetstream agent login` first (it opens the user's browser).
+- `meetstream setup --agent claude --access readonly [--model <id>] [--effort low|medium|high] --no-start --json` → `{"agent","device_id","agent_config_id","access","workdir","model","effort"}`. Without `--model`/`--effort` the CLI's own defaults are used (`""`); it never asks. The calendar step is skipped under `--json`/`--no-input` (or `--no-calendar`); connect it with `calendar connect`. Under `--no-input`, run `meetstream agent login` first (it opens the user's browser).
+- `meetstream setup ... --dry-run --json` → `{"dry_run": true, "method": "POST"|"PUT", "agent_config_id", "body": {..., "model": {"provider": "local_agent", "model"?: str, "local_agent": {...}}}, "setup": {"agent","model","effort","workdir"}}`; nothing is sent or saved.
+- `meetstream agent bench [--agent <name>] [--compare] [--models a,b] [--parallel N] [--effort e] [--export file] --json --no-input` → `{"agent", "effort", "stopped": int, "results": [{"model","state": "done"|"failed"|"cancelled","input_tokens","output_tokens","tokens_per_hour","cost_per_hour_usd","free","seconds","first_output_ms","error"?}], "export"?: {"path","written","models_in_file"}}`. Each model is one real, short turn on the user's plan or API credits. Exit 1 when no model reported usage; exit 2 for a CLI that reports no token usage (Copilot, Muse, OpenClaw).
 - `meetstream agent serve --json` runs until stopped and prints JSON-line events (`ready`, `relay_connected`, …). Start it in its own terminal; don't wait for it to exit.
 - `meetstream agent status --json` → `{"signed_in": bool, "device_id", "relay_url", "store"}`.
 - Then send MIA: `meetstream join <url> --agent-config <agent_config_id>`.

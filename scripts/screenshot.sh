@@ -1,12 +1,29 @@
 #!/bin/sh
-# Renders the home screen and `doctor` to PNGs in docs/images (needs charm freeze).
+# Renders the home screen, setup's model step, the bench table and `doctor` to
+# PNGs in docs/images (needs charm freeze). Everything runs against a fake home
+# with fake agent CLIs and stub data, so no real device, account or path shows.
 set -e
 cd "$(dirname "$0")/.."
-home=$(mktemp); doc=$(mktemp); cfg=$(mktemp -d)
+out=$(mktemp -d)
+demo=/tmp/meetstream-demo # short, neutral paths in the doctor output
+rm -rf "$demo" && mkdir -p "$demo/bin" "$demo/home/meetings" "$demo/kit" "$demo/cfg"
 FREEZE="--language ansi --window --theme dracula --padding 20,40 --font.size 15 --border.radius 8"
-FORCE_COLOR=1 MEETSTREAM_DUMP_HOME="$home" go test ./internal/cli -run TestHomeView -count=1 </dev/null >/dev/null
+FORCE_COLOR=1 MEETSTREAM_DUMP_HOME="$out/home" MEETSTREAM_DUMP_SETUP_MODEL="$out/setup-model" MEETSTREAM_DUMP_BENCH="$out/bench" \
+	go test ./internal/cli -run 'TestHomeView|TestSetupModelView|TestBenchTableView' -count=1 </dev/null >/dev/null
 go build -o dist-local/meetstream ./cmd/meetstream </dev/null
-FORCE_COLOR=1 MEETSTREAM_CONFIG_DIR="$cfg" MEETSTREAM_API_KEY=ms_demo_key_a1b2 ./dist-local/meetstream doctor </dev/null >"$doc"
-freeze "$home" $FREEZE -o docs/images/home.png </dev/null
-freeze "$doc" $FREEZE -o docs/images/doctor.png </dev/null
-rm -rf "$home" "$doc" "$cfg"
+
+# Fake agent CLI (signed in) and a fake computer name for the relay line.
+printf '#!/bin/sh\nexit 0\n' >"$demo/bin/claude"
+printf '#!/bin/sh\necho "Demo Mac"\n' >"$demo/bin/scutil"
+chmod +x "$demo/bin/claude" "$demo/bin/scutil"
+printf '{"device_id":"dev_demo01","refresh_token":"demo","auth_url":"https://auth.example.com","relay_url":"wss://relay.example.com/v1/connect"}' >"$demo/kit/credentials.json"
+printf '{"agent":"claude","workdir":"%s","max_access":"readonly","tunnel":"relay","model":"sonnet","effort":"medium"}' "$demo/home/meetings" >"$demo/kit/setup.json"
+(cd "$demo/home/meetings" && env -i PATH="$demo/bin" HOME="$demo/home" USER=you FORCE_COLOR=1 \
+	MEETSTREAM_CONFIG_DIR="$demo/cfg" MEETSTREAM_AGENT_KIT_HOME="$demo/kit" MEETSTREAM_AGENT_KIT_CREDENTIALS=file \
+	MEETSTREAM_API_KEY=ms_demo_key_a1b2 "$OLDPWD/dist-local/meetstream" doctor --no-warm </dev/null >"$out/doctor" 2>&1) || true
+
+freeze "$out/home" $FREEZE -o docs/images/home.png </dev/null
+freeze "$out/setup-model" $FREEZE -o docs/images/setup-model.png </dev/null
+freeze "$out/bench" $FREEZE -o docs/images/bench.png </dev/null
+freeze "$out/doctor" $FREEZE -o docs/images/doctor.png </dev/null
+rm -rf "$out" "$demo"
