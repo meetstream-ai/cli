@@ -95,10 +95,13 @@ func TestHomeView(t *testing.T) {
 	}
 	m := homeModel{version: "0.1.0", signedIn: "Signed in · key ms_…a1b2 (~/.meetstream)", cursor: 2}
 	v := m.View()
-	for _, want := range []string{"MeetStream", "Send a bot to a meeting", "coming in M4", "enter choose"} {
+	for _, want := range []string{"MeetStream", "Sign in", "Set up MIA", "Send a bot to a meeting", "Connect my calendar", "enter choose"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("home view missing %q", want)
 		}
+	}
+	if strings.Contains(v, "coming in") {
+		t.Errorf("home view still marks a shipped item as coming:\n%s", v)
 	}
 	if p := os.Getenv("MEETSTREAM_DUMP_HOME"); p != "" {
 		if err := os.WriteFile(p, []byte(v), 0o644); err != nil {

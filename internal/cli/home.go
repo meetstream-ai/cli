@@ -24,11 +24,12 @@ type homeItem struct {
 }
 
 var homeItems = []homeItem{
-	{[]string{"doctor"}, "Check my setup", "API key, config file and agent CLIs", ""},
 	{[]string{"login"}, "Sign in", "Browser sign-in, stores a named key", ""},
-	{[]string{"join"}, "Send a bot to a meeting", "Zoom, Google Meet, Microsoft Teams", ""},
-	{[]string{"bots"}, "My bots", "List, tail, transcripts, recordings", ""},
-	{[]string{"setup"}, "Bring my agent into the call", "Claude Code, Codex, Hermes, Copilot CLI…", "M4"},
+	{[]string{"setup"}, "Set up MIA", "Hosted, your keys, or your own agent (Claude Code, Codex, Hermes…)", ""},
+	{[]string{"join"}, "Send a bot to a meeting", "Google Meet, Zoom, Microsoft Teams", ""},
+	{[]string{"calendar", "connect"}, "Connect my calendar", "MIA joins the meetings you host or accepted", ""},
+	{[]string{"bots", "list"}, "My bots", "Status, transcripts, recordings", ""},
+	{[]string{"doctor"}, "Check my setup", "API key, agent CLI, sign-in, relay", ""},
 	{[]string{"docs"}, "Read the docs", "README rendered in your terminal", ""},
 }
 
