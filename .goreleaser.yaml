@@ -1,0 +1,52 @@
+# goreleaser v2: one binary for six targets, plus a Homebrew formula.
+# Snapshot builds run locally; real releases run from a tag.
+version: 2
+project_name: meetstream
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: meetstream
+    main: ./cmd/meetstream
+    binary: meetstream
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "meetstream_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md, LICENSE, SKILL.md]
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  disable: true
+
+brews:
+  - name: meetstream
+    repository:
+      owner: meetstream-ai
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://meetstream.ai
+    description: "MeetStream CLI: meeting bots, transcripts and your own agent in the call"
+    license: Apache-2.0
+    skip_upload: auto
+    test: |
+      system "#{bin}/meetstream", "version", "--json"

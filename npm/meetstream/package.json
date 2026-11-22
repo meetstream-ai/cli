@@ -1,0 +1,18 @@
+{
+  "name": "@meetstream/cli",
+  "version": "0.0.0",
+  "description": "MeetStream CLI: meeting bots, transcripts and your own agent in the call. Installs the native meetstream binary for your platform.",
+  "license": "Apache-2.0",
+  "homepage": "https://docs.meetstream.ai",
+  "bin": { "meetstream": "bin/meetstream.js" },
+  "files": ["bin", "README.md"],
+  "engines": { "node": ">=18" },
+  "optionalDependencies": {
+    "@meetstream/cli-darwin-arm64": "0.0.0",
+    "@meetstream/cli-darwin-x64": "0.0.0",
+    "@meetstream/cli-linux-arm64": "0.0.0",
+    "@meetstream/cli-linux-x64": "0.0.0",
+    "@meetstream/cli-win32-arm64": "0.0.0",
+    "@meetstream/cli-win32-x64": "0.0.0"
+  }
+}

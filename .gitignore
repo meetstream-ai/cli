@@ -1,0 +1,9 @@
+/dist/
+/dist-local/
+/npm/out/
+/pypi/out/
+*.test
+.DS_Store
+/.ref/
+/.gocache/
+/.internal/
