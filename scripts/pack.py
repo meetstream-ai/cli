@@ -23,6 +23,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
+# npm --provenance requires repository.url to match the repo that built the package.
+REPOSITORY = {"type": "git", "url": "git+https://github.com/meetstream-ai/cli.git"}
 
 # goreleaser (os, arch) -> npm (platform, cpu), wheel platform tag
 TARGETS = {
@@ -52,10 +54,11 @@ def pack_npm(version: str) -> None:
         d = out / f"cli-{plat}-{cpu}"
         (d / "bin").mkdir(parents=True)
         shutil.copy2(src, d / "bin" / src.name)
+        (d / "bin" / src.name).chmod(0o755)  # npm pack keeps the exec bit only if it is set
         (d / "package.json").write_text(json.dumps({
             "name": f"@meetstream/cli-{plat}-{cpu}", "version": version,
             "description": f"meetstream binary for {plat}-{cpu}. Install @meetstream/cli instead.",
-            "license": "Apache-2.0", "os": [plat], "cpu": [cpu], "files": ["bin"],
+            "license": "Apache-2.0", "repository": REPOSITORY, "os": [plat], "cpu": [cpu], "files": ["bin"],
             "preferUnplugged": True,
         }, indent=2) + "\n")
         subprocess.run(["npm", "pack", "--silent", "--pack-destination", str(out)], cwd=d, check=True)
@@ -105,7 +108,7 @@ def pack_pypi(version: str) -> None:
         with zipfile.ZipFile(whl, "w", zipfile.ZIP_DEFLATED) as z:
             for name, data in files.items():
                 info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
-                info.external_attr = (0o755 if "/scripts/" in name else 0o644) << 16
+                info.external_attr = (0o100755 if "/scripts/" in name else 0o100644) << 16  # S_IFREG so pip keeps the exec bit
                 z.writestr(info, data, zipfile.ZIP_DEFLATED)
         print(whl.relative_to(ROOT))
 
