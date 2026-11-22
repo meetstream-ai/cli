@@ -19,7 +19,7 @@ import (
 )
 
 func newLoginCmd(info BuildInfo) *cobra.Command {
-	var withKey, noBrowser bool
+	var withKey, noBrowser, noCalendar bool
 	cmd := &cobra.Command{
 		Use:     "login",
 		Short:   "Sign in with your browser and store a named API key",
@@ -81,11 +81,18 @@ For CI, pipe a key in instead:  printf %s "$KEY" | meetstream login --with-key`,
 				}
 			}
 
-			return saveKey(cmd, info, res)
+			if err := saveKey(cmd, info, res); err != nil {
+				return err
+			}
+			if noCalendar || !calendarCanPrompt() {
+				return nil
+			}
+			return offerCalendarConnect(cmd)
 		},
 	}
 	cmd.Flags().BoolVar(&withKey, "with-key", false, "read an API key from stdin instead of the browser (for CI)")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "print the sign-in link instead of opening a browser")
+	cmd.Flags().BoolVar(&noCalendar, "no-calendar", false, "don't offer to connect a calendar after signing in")
 	return cmd
 }
 
@@ -212,4 +219,30 @@ func saveKey(cmd *cobra.Command, info BuildInfo, res *login.Result) error {
 		ui.Note("Next:")
 		ui.Command("meetstream doctor")
 	})
+}
+
+// offerCalendarConnect asks, after an interactive login, whether to connect a
+// calendar. Skip, or a server without one-click connect, leaves a note for later;
+// other failures are warnings, since the login itself succeeded.
+func offerCalendarConnect(cmd *cobra.Command) error {
+	_, err := runCalendarConnect(cmd, calendarConnectOptions{
+		Question:    "Connect your calendar so MIA can join your meetings?",
+		CancelLabel: "Skip",
+	})
+	var ee *ExitError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &ee) && ee.Code == 130:
+		return err
+	case errors.Is(err, errCalendarSkipped):
+	case errors.As(err, &ee) && ee.Code == 3:
+		ui.Note(ee.Message + ".")
+	default:
+		ui.Warn("Calendar not connected: " + err.Error())
+	}
+	fmt.Fprintln(ui.Out)
+	ui.Note("Connect your calendar later with:")
+	ui.Command("meetstream calendar connect")
+	return nil
 }
