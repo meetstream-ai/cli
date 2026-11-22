@@ -1,16 +1,19 @@
 #!/bin/sh
-# Renders the home screen, setup's step 1 (how MIA runs, demo prices) and its
-# model step, the bench table and `doctor` to PNGs in docs/images (needs charm
-# freeze). Everything runs against a fake home with fake agent CLIs and stub
-# data, so no real device, account or path shows.
+# Renders the home app, its doctor pane, the bots / agents / calendar tables,
+# a transcript, setup's step 1 (how MIA runs, demo prices) and its model step,
+# the bench table and `doctor` to PNGs in docs/images (needs charm freeze).
+# Everything runs against a fake home, a fake API (in the tests) with demo
+# data, and fake agent CLIs, so no real device, account or path shows.
 set -e
 cd "$(dirname "$0")/.."
 out=$(mktemp -d)
 demo=/tmp/meetstream-demo # short, neutral paths in the doctor output
 rm -rf "$demo" && mkdir -p "$demo/bin" "$demo/home/meetings" "$demo/kit" "$demo/cfg"
 FREEZE="--language ansi --window --theme dracula --padding 20,40 --font.size 15 --border.radius 8"
-FORCE_COLOR=1 MEETSTREAM_DUMP_HOME="$out/home" MEETSTREAM_DUMP_SETUP_MODEL="$out/setup-model" MEETSTREAM_DUMP_SETUP_MODE="$out/setup-mode" MEETSTREAM_DUMP_BENCH="$out/bench" \
-	go test ./internal/cli -run 'TestHomeView|TestSetupModelView|TestSetupModeView|TestBenchTableView' -count=1 </dev/null >/dev/null
+FORCE_COLOR=1 MEETSTREAM_DUMP_HOME="$out/home" MEETSTREAM_DUMP_APP_DOCTOR="$out/app-doctor" \
+	MEETSTREAM_DUMP_BOTS="$out/bots-list" MEETSTREAM_DUMP_MIA="$out/mia-list" MEETSTREAM_DUMP_CALENDAR="$out/calendar-list" MEETSTREAM_DUMP_TRANSCRIPT="$out/transcript" \
+	MEETSTREAM_DUMP_SETUP_MODEL="$out/setup-model" MEETSTREAM_DUMP_SETUP_MODE="$out/setup-mode" MEETSTREAM_DUMP_BENCH="$out/bench" \
+	go test ./internal/cli -run 'TestHomeView|TestHomeDoctorRunsInsideAndEscReturns|TestHumanViews|TestSetupModelView|TestSetupModeView|TestBenchTableView' -count=1 </dev/null >/dev/null
 go build -o dist-local/meetstream ./cmd/meetstream </dev/null
 
 # Fake agent CLI (signed in) and a fake computer name for the relay line.
@@ -23,9 +26,7 @@ printf '{"agent":"claude","workdir":"%s","max_access":"readonly","tunnel":"relay
 	MEETSTREAM_CONFIG_DIR="$demo/cfg" MEETSTREAM_AGENT_KIT_HOME="$demo/kit" MEETSTREAM_AGENT_KIT_CREDENTIALS=file \
 	MEETSTREAM_API_KEY=ms_demo_key_a1b2 "$OLDPWD/dist-local/meetstream" doctor --no-warm </dev/null >"$out/doctor" 2>&1) || true
 
-freeze "$out/home" $FREEZE -o docs/images/home.png </dev/null
-freeze "$out/setup-model" $FREEZE -o docs/images/setup-model.png </dev/null
-freeze "$out/setup-mode" $FREEZE -o docs/images/setup-mode.png </dev/null
-freeze "$out/bench" $FREEZE -o docs/images/bench.png </dev/null
-freeze "$out/doctor" $FREEZE -o docs/images/doctor.png </dev/null
+for shot in home app-doctor bots-list mia-list calendar-list transcript setup-model setup-mode bench doctor; do
+	freeze "$out/$shot" $FREEZE -o "docs/images/$shot.png" </dev/null
+done
 rm -rf "$out" "$demo"

@@ -41,6 +41,7 @@ var Out io.Writer = os.Stdout
 
 // Setup decides colour once, from the flags and the environment.
 func Setup(noColor bool, jsonMode bool) {
+	headerShown = false
 	if jsonMode {
 		Out = os.Stderr
 	}
@@ -70,14 +71,31 @@ func Interactive() bool { return IsTerminal(os.Stdin) && IsTerminal(os.Stdout) }
 
 func line(s string) { fmt.Fprintln(Out, s) }
 
-func OK(s string)      { line("  " + okStyle.Render("✓") + " " + s) }
-func Fail(s string)    { line("  " + failStyle.Render("✗") + " " + s) }
-func Warn(s string)    { line("  " + warnStyle.Render("!") + " " + s) }
-func Note(s string)    { line("    " + DimStyle.Render(s)) }
-func Command(s string) { line("      " + CmdStyle.Render(s)) }
+func OK(s string)      { line(OKLine(s)) }
+func Fail(s string)    { line(FailLine(s)) }
+func Warn(s string)    { line(WarnLine(s)) }
+func Note(s string)    { line(NoteLine(s)) }
+func Command(s string) { line(CommandLine(s)) }
+
+// The same lines as strings, for views drawn inside the home app.
+func OKLine(s string) string      { return "  " + okStyle.Render("✓") + " " + s }
+func FailLine(s string) string    { return "  " + failStyle.Render("✗") + " " + s }
+func WarnLine(s string) string    { return "  " + warnStyle.Render("!") + " " + s }
+func NoteLine(s string) string    { return "    " + DimStyle.Render(s) }
+func CommandLine(s string) string { return "      " + CmdStyle.Render(s) }
+
+// headerShown makes Header draw the mascot banner once per command run; a
+// sub-flow (login, then the calendar offer) gets a small titled rule instead.
+var headerShown bool
 
 // Header is the kit's rounded banner: "◆ MeetStream  v1.2.3" over a tagline.
+// The second and later calls in one run draw only a small section rule.
 func Header(version, tagline string) {
+	if headerShown {
+		SubHeader(tagline)
+		return
+	}
+	headerShown = true
 	top := TitleStyle.Render("◆ MeetStream") + "  " + DimStyle.Render("v"+version)
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -102,6 +120,13 @@ func Box(title string, rows [][2]string) {
 		b.WriteString("\n" + DimStyle.Render(fmt.Sprintf("%-*s", w, r[0])) + "  " + r[1])
 	}
 	line(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(Border).Padding(0, 1).Render(b.String()))
+}
+
+// SubHeader is a small titled rule for a flow inside a command: "── Title ────".
+func SubHeader(title string) {
+	label := " " + title + " "
+	line("")
+	line(DimStyle.Render("──") + lipgloss.NewStyle().Foreground(Cyan).Bold(true).Render(label) + DimStyle.Render(strings.Repeat("─", max(4, 60-len(label)))))
 }
 
 // Step is a numbered section rule: "── 1/3  Title ─────".

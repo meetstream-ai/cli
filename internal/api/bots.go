@@ -332,6 +332,23 @@ func (c *Client) ListBots(ctx context.Context) (any, error) {
 	return c.getJSON(ctx, "/bots")
 }
 
+// ListBotsPage is one page of GET /bots: limit (1-50, 0 = the server's
+// default) and the cursor from the page before ("" for the first).
+func (c *Client) ListBotsPage(ctx context.Context, limit int, cursor string) (any, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	path := "/bots"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	return c.getJSON(ctx, path)
+}
+
 func (c *Client) BotStatus(ctx context.Context, id string) (any, error) {
 	return c.getJSON(ctx, "/bots/"+id+"/status")
 }

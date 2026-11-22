@@ -110,25 +110,57 @@ func doctorAgentChecks(cmd *cobra.Command, agentName, binary string, noWarm bool
 	return checks.Doctor(env, in)
 }
 
+// doctorKeyChecks are the instant checks: the API key and the server.
+func doctorKeyChecks() (all []checks.Check, keyMissing bool) {
+	key, src := config.ResolveKey()
+	switch src {
+	case "env":
+		all = append(all, checks.Check{Name: "API key", Status: checks.OK, Detail: "MEETSTREAM_API_KEY " + config.Mask(key)})
+	case "file":
+		all = append(all, checks.Check{Name: "API key", Status: checks.OK, Detail: ui.ShortPath(config.Path()) + " " + config.Mask(key)})
+	default:
+		keyMissing = true
+		all = append(all, checks.Check{Name: "API key", Status: checks.Fail, Detail: "not set", Hint: "meetstream login"})
+	}
+	all = append(all, checks.Check{Name: "API URL", Status: checks.OK, Detail: config.APIURL()})
+	return all, keyMissing
+}
+
+// renderDoctorLines is one line per check, with the fix under each problem.
+func renderDoctorLines(all []checks.Check) string {
+	var lines []string
+	for _, c := range all {
+		switch c.Status {
+		case checks.OK:
+			lines = append(lines, ui.OKLine(fmt.Sprintf("%-10s %s", c.Name, ui.DimStyle.Render(c.Detail))))
+		case checks.Warn:
+			lines = append(lines, ui.WarnLine(fmt.Sprintf("%-10s %s", c.Name, c.Detail)))
+		default:
+			lines = append(lines, ui.FailLine(fmt.Sprintf("%-10s %s", c.Name, c.Detail)))
+		}
+		if c.Status != checks.OK && c.Hint != "" {
+			lines = append(lines, ui.CommandLine(c.Hint))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderDoctor is the checks and the verdict, as `meetstream doctor` prints them.
+func renderDoctor(all []checks.Check, verdict string, failed int) string {
+	end := ui.OKLine(verdict)
+	if failed > 0 {
+		end = ui.FailLine(fmt.Sprintf("%d problem(s) to fix.", failed))
+	}
+	return renderDoctorLines(all) + "\n\n" + end
+}
+
 func newDoctorCmd(info BuildInfo) *cobra.Command {
 	var agentName, binary string
 	var noWarm bool
 	cmd := &cobra.Command{
 		Use: "doctor", Short: "Check your setup: API key, config file, your agent CLI", GroupID: "start", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			var all []checks.Check
-			key, src := config.ResolveKey()
-			keyMissing := false
-			switch src {
-			case "env":
-				all = append(all, checks.Check{Name: "API key", Status: checks.OK, Detail: "MEETSTREAM_API_KEY " + config.Mask(key)})
-			case "file":
-				all = append(all, checks.Check{Name: "API key", Status: checks.OK, Detail: ui.ShortPath(config.Path()) + " " + config.Mask(key)})
-			default:
-				keyMissing = true
-				all = append(all, checks.Check{Name: "API key", Status: checks.Fail, Detail: "not set", Hint: "meetstream login"})
-			}
-			all = append(all, checks.Check{Name: "API URL", Status: checks.OK, Detail: config.APIURL()})
+			all, keyMissing := doctorKeyChecks()
 			all = append(all, doctorAgentChecks(cmd, agentName, binary, noWarm)...)
 			verdict, failed := checks.Verdict(all)
 			out := make([]doctorCheck, len(all))
@@ -138,25 +170,7 @@ func newDoctorCmd(info BuildInfo) *cobra.Command {
 			err := emit(map[string]any{"ok": failed == 0, "version": info.Version, "verdict": verdict, "checks": out}, func() {
 				ui.Header(info.Version, "Checking your setup")
 				fmt.Fprintln(ui.Out)
-				for _, c := range all {
-					switch c.Status {
-					case checks.OK:
-						ui.OK(fmt.Sprintf("%-10s %s", c.Name, ui.DimStyle.Render(c.Detail)))
-					case checks.Warn:
-						ui.Warn(fmt.Sprintf("%-10s %s", c.Name, c.Detail))
-					default:
-						ui.Fail(fmt.Sprintf("%-10s %s", c.Name, c.Detail))
-					}
-					if c.Status != checks.OK && c.Hint != "" {
-						ui.Command(c.Hint)
-					}
-				}
-				fmt.Fprintln(ui.Out)
-				if failed == 0 {
-					ui.OK(verdict)
-				} else {
-					ui.Fail(fmt.Sprintf("%d problem(s) to fix.", failed))
-				}
+				fmt.Fprintln(ui.Out, renderDoctor(all, verdict, failed))
 			})
 			switch {
 			case err != nil:

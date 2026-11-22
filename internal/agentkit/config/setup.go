@@ -21,6 +21,8 @@ type Setup struct {
 	MeetingMD   string `json:"meeting_md"`
 	IgnoreRules string `json:"ignore_rules"`
 	Effort      string `json:"effort"`
+	// AutoStart "yes" starts your agent for meetings when the home app opens (default off).
+	AutoStart string `json:"auto_start,omitempty"`
 }
 
 func LoadSetup(dir string) (*Setup, error) {

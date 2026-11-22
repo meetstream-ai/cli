@@ -810,7 +810,8 @@ func newAgentSetupCmd(info BuildInfo) *cobra.Command {
 				return err
 			}
 			if !g.JSON {
-				ui.Header(info.Version, "Bring MIA into your meetings")
+				ui.Header(info.Version, "Bring an AI agent into your meetings")
+				ui.Note(miaIntro)
 			}
 			w.cat = fetchCatalog(w)
 			if err := w.run(); err != nil {
