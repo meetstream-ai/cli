@@ -114,15 +114,23 @@ func Discover(ctx context.Context, authURL string) error {
 		Scopes []string `json:"scopes_supported"`
 	}
 	if res.StatusCode != 200 || json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&meta) != nil {
-		return fmt.Errorf("%s did not answer OAuth discovery (%d)", authURL, res.StatusCode)
+		return notOffered(fmt.Sprintf("%s did not answer OAuth discovery (%d)", authURL, res.StatusCode))
 	}
 	for _, s := range meta.Scopes {
 		if s == Scope {
 			return nil
 		}
 	}
-	return fmt.Errorf("the relay sign-in isn't switched on at %s yet", authURL)
+	return notOffered(fmt.Sprintf("the relay sign-in isn't switched on at %s yet", authURL))
 }
+
+// ErrNotOffered matches (errors.Is) a server that answers but does not offer the relay sign-in.
+var ErrNotOffered = errors.New("relay not offered")
+
+type notOffered string
+
+func (e notOffered) Error() string        { return string(e) }
+func (e notOffered) Is(target error) bool { return target == ErrNotOffered }
 
 // LoginOptions tune the browser flow.
 type LoginOptions struct {

@@ -1,6 +1,7 @@
 package meetingctx
 
 import (
+	"fmt"
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
 	"github.com/meetstream-ai/cli/internal/agentkit/prompts"
 	"os"
@@ -101,6 +102,54 @@ func Tokens(items []Item) int64 {
 	}
 	return n
 }
+
+// Rule is a project rules file the agent CLI reads from the work folder on every turn.
+type Rule struct {
+	Name string
+	Size int64
+}
+
+// ProjectRules lists the project rules files in folder (the kit's PROJECT_RULE_FILES).
+func ProjectRules(folder string) []Rule {
+	var out []Rule
+	for _, name := range anyProject {
+		if s, err := os.Stat(filepath.Join(folder, name)); err == nil && s.Mode().IsRegular() {
+			out = append(out, Rule{name, s.Size()})
+		}
+	}
+	return out
+}
+
+// Summary is the one-line context label: "meeting only · 0.4k tokens/turn".
+func Summary(a agents.Spec, workdir string, ignore, useMeeting bool) string {
+	items := Effective(a, workdir, "", ignore, useMeeting)
+	return fmt.Sprintf("%s · %.1fk tokens/turn", Mode(workdir, ignore), float64(Tokens(items))/1000)
+}
+
+// Table is one row per context file: loaded or not, size, tokens and note.
+func Table(items []Item) []string {
+	if len(items) == 0 {
+		return []string{"(nothing extra: only MIA's rules and the meeting)"}
+	}
+	width := 0
+	for _, i := range items {
+		width = max(width, len(i.Name))
+	}
+	var rows []string
+	for _, i := range items {
+		mark := "·"
+		if i.Loaded {
+			mark = "✓"
+		}
+		note := ""
+		if i.Note != "" {
+			note = "  " + i.Note
+		}
+		rows = append(rows, fmt.Sprintf("%s %-*s  %5.1f KB  ≈ %6d tokens%s", mark, width, i.Name, float64(i.Size)/1024, i.Size/4, note))
+	}
+	return rows
+}
+
 func Mode(workdir string, ignore bool) string {
 	w, _ := filepath.Abs(workdir)
 	m, _ := filepath.Abs(Workspace())

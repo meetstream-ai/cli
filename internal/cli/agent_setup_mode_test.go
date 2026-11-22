@@ -298,7 +298,7 @@ func TestSetupWarnsOnManagedKeyFallback(t *testing.T) {
 	}
 	var human string
 	human = withStderr(t, func() { _, code = run(t, env, "setup", "--mode", "byok", "--no-input") })
-	for _, want := range []string{"No saved key for the ears and voice", "MeetStream keys instead", "Meeting $0.35 + MIA harness $0.40 + ears $0.20 + voice $0.25 + your provider charges", keysURL} {
+	for _, want := range []string{"No saved key for the ears and voice", "MeetStream keys instead", "Meeting $0.35 + MIA harness $0.40 + ears $0.20 + voice $0.25 + your provider charges", keysURL()} {
 		if !strings.Contains(human, want) {
 			t.Errorf("missing %q in\n%s", want, human)
 		}

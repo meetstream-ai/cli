@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -23,7 +22,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
 	"github.com/meetstream-ai/cli/internal/agentkit/checks"
 	kitconfig "github.com/meetstream-ai/cli/internal/agentkit/config"
-	agentlogin "github.com/meetstream-ai/cli/internal/agentkit/login"
+	"github.com/meetstream-ai/cli/internal/agentkit/meetingctx"
 	"github.com/meetstream-ai/cli/internal/agentkit/muse"
 	"github.com/meetstream-ai/cli/internal/agentkit/relay"
 	"github.com/meetstream-ai/cli/internal/agentkit/warmcheck"
@@ -159,8 +158,16 @@ type setupWizard struct {
 	spec      agents.Spec
 	creds     *relay.Credentials
 	pickAgain bool   // back at step 1 (or an install declined): show the picker even with --agent
-	warmed    string // the agent whose warm path was already checked
 	calendar  string // "google" or "microsoft" to connect at the end; "" skips
+
+	// Your agent on this computer: the kit's questions after the model.
+	owner                              string
+	ignoreRules, useMeetingMD          bool
+	workdirFlag, accessFlag, ownerFlag bool
+	testFlag, newAgent                 bool
+	last                               *kitconfig.Setup // setup.json from the last run, nil the first time
+	lastAgent, savedConfigID, miaID    string           // the last run's agent and MIA agent; the one this run made
+	tested, testResult, loginState     string           // the test that passed; passed/skipped/failed/started anyway; ok/expired/unknown
 }
 
 // setupInteractive is whether setup may ask; tests swap it to drive the menus.
@@ -178,7 +185,7 @@ func (w *setupWizard) stepAgent() (bool, menuResult, error) {
 	for {
 		w.step("Your agent")
 		choices := detectAgents()
-		prev := w.agentName
+		prev := orDefault(w.agentName, w.lastAgent)
 		if w.chosen != nil {
 			prev = w.chosen.name
 		}
@@ -211,8 +218,13 @@ func (w *setupWizard) stepAgent() (bool, menuResult, error) {
 				return false, menuQuit, errSetupCancelled
 			}
 		default:
+			for i := range choices { // the last setup's agent, else the first installed
+				if choices[i].installed && choices[i].name == w.lastAgent {
+					chosen = &choices[i]
+				}
+			}
 			for i := range choices {
-				if choices[i].installed {
+				if chosen == nil && choices[i].installed {
 					chosen = &choices[i]
 					break
 				}
@@ -261,29 +273,28 @@ func (w *setupWizard) stepAgent() (bool, menuResult, error) {
 				continue
 			}
 		}
-		if w.chosen != nil && w.chosen.name != chosen.name && !w.modelFlags {
+		before := w.lastAgent
+		if w.chosen != nil {
+			before = w.chosen.name
+		}
+		if before != "" && before != chosen.name && !w.modelFlags {
 			w.model, w.effort = "", "" // another agent: its own models
 		}
 		w.chosen, w.spec = chosen, spec
-		st := (&agentlogin.Checker{Agent: spec, Binary: chosen.binary}).Check(true)
 		if !g.JSON {
 			ui.OK(spec.Label + "  " + ui.DimStyle.Render(ui.ShortPath(chosen.binary)))
-			if !st.Usable() {
-				ui.Warn(spec.Label + " needs a sign-in: run " + ui.CmdStyle.Render(spec.Relogin))
-			}
 		}
 		if !access.Valid(w.maxAccess) {
 			return false, menuQuit, usageErr("invalid --access", "choose readonly, confirm, or full")
 		}
-		if w.workdir == "" {
-			w.workdir, _ = os.Getwd()
+		// Like the kit: a signed-out agent stops here, with a sign-in offer.
+		res, err := w.gateSignIn()
+		if err != nil {
+			return true, menuQuit, err
 		}
-		if abs, err := filepath.Abs(w.workdir); err == nil {
-			w.workdir = abs
-		}
-		if w.interactive && st.Usable() && w.warmed != spec.Name && warmcheck.AppliesTo(spec) {
-			w.warmed = spec.Name
-			w.warmCheck()
+		if res == menuBack {
+			w.pickAgain = true
+			continue
 		}
 		return true, menuChosen, nil
 	}
@@ -303,46 +314,6 @@ func museSay(kind, text string) {
 	default:
 		ui.Note(text)
 	}
-}
-
-// warmCheck tests the warm (ACP) path meetings use, one stage at a time with a
-// spinner. A failure warns with its fix; setup goes on.
-func (w *setupWizard) warmCheck() {
-	type stage struct{ event, doing, done string }
-	stages := []stage{{"ready", "Starting " + w.spec.Label + " (ACP)", "Session ready"}}
-	if w.spec.ACPMCP {
-		stages = append(stages, stage{"tool_call", "Calling a meeting tool", "Tool called"})
-	}
-	stages = append(stages, stage{"done", "Answering", "Answered"})
-	at := 0
-	stop := spin(stages[0].doing)
-	c := kitconfig.Config{Agent: w.spec, Binary: w.chosen.binary, Workdir: w.workdir, Owner: setupOwner()}
-	r := setupWarmCheck(w.cmd.Context(), c, warmcheck.Options{Turn: true, OnStage: func(event string, elapsed time.Duration) {
-		for i := at; i < len(stages); i++ {
-			if stages[i].event != event {
-				continue
-			}
-			stop()
-			if event != "done" {
-				ui.OK(fmt.Sprintf("%s  %s", stages[i].done, ui.DimStyle.Render(fmt.Sprintf("%.1f s", elapsed.Seconds()))))
-			}
-			at = i + 1
-			if at < len(stages) {
-				stop = spin(stages[at].doing)
-			}
-			return
-		}
-	}})
-	stop()
-	if r.OK {
-		ui.OK(fmt.Sprintf("Warm mode (ACP): %s (%.1f s)", r.Message, r.Total.Seconds()))
-		return
-	}
-	ui.Warn("Warm mode (ACP): " + r.Message)
-	if r.Fix != "" {
-		ui.Note("Fix: " + r.Fix)
-	}
-	ui.Note("Setup goes on; meetings may fail or have no meeting tools until this is fixed.")
 }
 
 func setupOwner() string {
@@ -380,6 +351,9 @@ func orDefault(v, fallback string) string {
 	return v
 }
 
+// setupRelayLogin is the relay's browser sign-in; tests swap it.
+var setupRelayLogin = relay.Login
+
 // stepConnect is step 3: this computer's relay sign-in.
 func (w *setupWizard) stepConnect() (bool, menuResult, error) {
 	w.step("Connect this computer")
@@ -402,12 +376,15 @@ func (w *setupWizard) stepConnect() (bool, menuResult, error) {
 		if !w.interactive {
 			return false, menuQuit, &ExitError{Code: 2, Message: "this computer isn't connected to MeetStream", Hint: "run: meetstream agent login"}
 		}
-		t, err := relay.Login(w.cmd.Context(), relay.LoginOptions{OpenBrowser: login.Open, ShowURL: func(u string) {
+		t, err := setupRelayLogin(w.cmd.Context(), relay.LoginOptions{OpenBrowser: login.Open, ShowURL: func(u string) {
 			ui.Note("Opening your browser to connect this computer. If it doesn't open:")
 			ui.Command(u)
 		}})
+		if errors.Is(err, relay.ErrNotOffered) {
+			return true, menuQuit, errRelayNotEnabled()
+		}
 		if err != nil {
-			return true, menuQuit, &ExitError{Code: 1, Message: err.Error(), Hint: "the relay is on for test stacks first; set MEETSTREAM_AUTH_URL and MEETSTREAM_RELAY_URL"}
+			return true, menuQuit, &ExitError{Code: 1, Message: err.Error(), Hint: "check your connection, then run meetstream setup again"}
 		}
 		w.creds = &relay.Credentials{DeviceID: t.DeviceID, RefreshToken: t.RefreshToken, AuthURL: relay.AuthURL(), RelayURL: relay.RelayURL()}
 		if err := store.Save(w.creds); err != nil {
@@ -441,8 +418,9 @@ func (w *setupWizard) steps() []setupStep {
 	case modeBYOK:
 		s = append(s, setupStep{"stack", w.stepStack}, setupStep{"mia", w.stepMIA})
 	default:
-		s = append(s, setupStep{"agent", w.stepAgent}, setupStep{"model", w.stepModel}, setupStep{"voice", w.stepVoiceKeys},
-			setupStep{"connect", w.stepConnect}, setupStep{"mia", w.stepMIA})
+		s = append(s, setupStep{"agent", w.stepAgent}, setupStep{"model", w.stepModel}, setupStep{"folder", w.stepFolder},
+			setupStep{"access", w.stepAccess}, setupStep{"name", w.stepName}, setupStep{"test", w.stepTest},
+			setupStep{"voice", w.stepVoiceKeys}, setupStep{"connect", w.stepConnect}, setupStep{"mia", w.stepMIA})
 	}
 	return append(s, setupStep{"calendar", w.stepCalendar})
 }
@@ -464,11 +442,14 @@ func (w *setupWizard) checkFlags(cmd *cobra.Command) error {
 		return usageErr("invalid --voice-keys "+w.voiceKeys, "choose meetstream or own")
 	}
 	if w.mode != modeLocal {
-		for _, f := range []string{"voice-keys", "agent", "model", "effort", "agent-config"} {
+		for _, f := range []string{"voice-keys", "agent", "model", "effort", "agent-config", "owner", "test", "new-agent"} {
 			if cmd.Flags().Changed(f) {
 				return usageErr("--"+f+" works with --mode local-agent", "")
 			}
 		}
+	}
+	if w.newAgent && w.configID != "" {
+		return usageErr("--new-agent and --agent-config cannot be used together", "")
 	}
 	if w.mode == modeLocal && w.brainFlag != "" {
 		return usageErr("--brain does not apply to --mode local-agent", "your agent CLI is the brain; pick its model with --model")
@@ -552,9 +533,9 @@ func (w *setupWizard) stepMode() (bool, menuResult, error) {
 // stepVoiceKeys is the local agent's ears and voice: MeetStream keys or yours.
 func (w *setupWizard) stepVoiceKeys() (bool, menuResult, error) {
 	w.step("Ears and voice")
-	if w.configID != "" {
+	if id := w.targetID(); id != "" {
 		if !g.JSON {
-			ui.OK("Updating MIA agent " + w.configID + ": it keeps its ears and voice.")
+			ui.OK("Updating MIA agent " + id + ": it keeps its ears and voice.")
 		}
 		return false, menuChosen, nil
 	}
@@ -573,7 +554,7 @@ func (w *setupWizard) stepVoiceKeys() (bool, menuResult, error) {
 		}
 		details := []string{
 			"MeetStream runs speech to text (" + w.cat.defaultPick(secEars, true).String() + ") and the voice (" + w.cat.defaultPick(secVoice, true).String() + ") on its keys.\n" + ms.breakdown(),
-			"Your own provider keys for speech to text and the voice. Add them in the dashboard: " + keysURL + " (setup never asks for keys).\n" + own.breakdown(),
+			"Your own provider keys for speech to text and the voice. Add them in the dashboard: " + keysURL() + " (setup never asks for keys).\n" + own.breakdown(),
 		}
 		cursor := 0
 		if w.voiceKeys == keysOwn {
@@ -624,7 +605,7 @@ func (w *setupWizard) stepStack() (bool, menuResult, error) {
 			for _, c := range choices {
 				labels = append(labels, c.Provider+" · "+c.Model)
 				hints = append(hints, "your "+c.Provider+" key")
-				details = append(details, "Runs on your "+c.Provider+" key; "+c.Provider+" bills you for it. Add the key in the dashboard: "+keysURL)
+				details = append(details, "Runs on your "+c.Provider+" key; "+c.Provider+" bills you for it. Add the key in the dashboard: "+keysURL())
 			}
 			res, j, err := ask(newStepMenu(stackQuestions[i].question, labels...).withHints(hints).withDetails(details).at(cursor))
 			if err != nil || res == menuQuit {
@@ -643,7 +624,7 @@ func (w *setupWizard) stepStack() (bool, menuResult, error) {
 	}
 	if !g.JSON {
 		ui.OK("Ears: " + w.pickText(secEars) + "  Brain: " + w.pickText(secBrain) + "  Voice: " + w.pickText(secVoice))
-		ui.Note("Add your provider keys in the dashboard: " + keysURL + " (setup never asks for keys)")
+		ui.Note("Add your provider keys in the dashboard: " + keysURL() + " (setup never asks for keys)")
 	}
 	return w.interactive, menuChosen, nil
 }
@@ -658,7 +639,7 @@ func (w *setupWizard) pickText(section string) string {
 
 // quote is the price of what setup will create.
 func (w *setupWizard) quote() quote {
-	if w.mode == modeLocal && w.configID != "" {
+	if w.mode == modeLocal && w.targetID() != "" {
 		return quote{Note: "Price unchanged: the MIA agent keeps its ears and voice."}
 	}
 	return quoteFor(w.cat, w.picks, w.sections())
@@ -669,7 +650,7 @@ func (w *setupWizard) summary() string {
 	var parts []string
 	if w.mode == modeLocal {
 		parts = append(parts, "Brain: "+w.spec.Label+" on this computer ("+orDefault(w.model, "the CLI's default")+")")
-		if w.configID == "" {
+		if w.targetID() == "" {
 			parts = append(parts, "Ears: "+w.pickText(secEars), "Voice: "+w.pickText(secVoice))
 		}
 	} else {
@@ -699,10 +680,30 @@ func (w *setupWizard) stepMIA() (bool, menuResult, error) {
 		switch {
 		case w.dryRun:
 			return "Show the request (--dry-run, nothing sent)"
-		case w.configID != "":
-			return "Update MIA agent " + w.configID
+		case w.targetID() != "":
+			return "Update MIA agent " + w.targetID()
 		}
 		return "Create MIA agent \"" + w.defaultName() + "\""
+	}
+	if w.mode == modeLocal && w.configID == "" && w.savedConfigID != "" && !w.dryRun {
+		// The last setup made one: update it, or make another.
+		create := "Create a new MIA agent \"" + w.defaultName() + "\""
+		was := w.newAgent
+		w.newAgent = false
+		update := w.summary()
+		w.newAgent = true
+		fresh := w.summary()
+		w.newAgent = was
+		cursor := 0
+		if was {
+			cursor = 1
+		}
+		res, i, err := ask(newStepMenu("Update your MIA agent for "+w.spec.Label+"?", "Update MIA agent "+w.savedConfigID, create).
+			withDetails([]string{update, fresh}).at(cursor))
+		if err == nil && res == menuChosen {
+			w.newAgent = i == 1
+		}
+		return true, res, err
 	}
 	if w.mode == modeLocal {
 		res, _, err := ask(newStepMenu("Create the MIA agent for "+w.spec.Label+"?", option()).withDetails([]string{w.summary()}))
@@ -753,10 +754,18 @@ func (w *setupWizard) stepCalendar() (bool, menuResult, error) {
 
 // run walks the chosen mode's steps. Back (Esc or "← Back") returns to the last
 // step that asked something; Esc at step 1, or q anywhere, cancels with exit 130.
-// Back to a step a flag answered (the mode, the agent) asks it again.
-func (w *setupWizard) run() error {
+// Back to a step a flag answered (the mode, the agent) asks it again. start
+// skips to that step (the last setup's answers, straight to its test). Each
+// finished step saves the answers so far.
+func (w *setupWizard) run(start string) error {
 	asked := map[string]bool{}
-	for i := 0; ; {
+	i := 0
+	for j, s := range w.steps() {
+		if s.id == start {
+			i = j
+		}
+	}
+	for {
 		steps := w.steps()
 		if i >= len(steps) {
 			return nil
@@ -767,6 +776,9 @@ func (w *setupWizard) run() error {
 			return err
 		}
 		asked[steps[i].id] = a
+		if res == menuChosen {
+			w.saveAnswers()
+		}
 		switch res {
 		case menuQuit:
 			return errSetupCancelled
@@ -803,6 +815,10 @@ func newAgentSetupCmd(info BuildInfo) *cobra.Command {
 			w.modelFlags = cmd.Flags().Changed("model") || cmd.Flags().Changed("effort")
 			w.modeFlag = cmd.Flags().Changed("mode") || cmd.Flags().Changed("agent")
 			w.voiceKeysFlag = cmd.Flags().Changed("voice-keys")
+			w.workdirFlag = cmd.Flags().Changed("workdir")
+			w.accessFlag = cmd.Flags().Changed("access")
+			w.ownerFlag = cmd.Flags().Changed("owner")
+			w.useMeetingMD = true
 			if w.effort != "" && !effortPattern.MatchString(w.effort) {
 				return usageErr("invalid --effort", "for example: low, medium, high")
 			}
@@ -814,7 +830,20 @@ func newAgentSetupCmd(info BuildInfo) *cobra.Command {
 				ui.Note(miaIntro)
 			}
 			w.cat = fetchCatalog(w)
-			if err := w.run(); err != nil {
+			if w.mode == modeLocal {
+				w.loadLast()
+			}
+			start := ""
+			if w.interactive && w.last != nil && !w.modeFlag {
+				again, err := w.startWithLast()
+				if err != nil {
+					return err
+				}
+				if again {
+					start = "test"
+				}
+			}
+			if err := w.run(start); err != nil {
 				return err
 			}
 			return w.finish()
@@ -829,8 +858,11 @@ func newAgentSetupCmd(info BuildInfo) *cobra.Command {
 	f.StringVar(&w.agentName, "agent", "", "agent CLI: "+strings.Join(agentOrder, ", ")+" (default: pick, or the first installed)")
 	f.StringVar(&w.model, "model", "", "model the agent CLI uses (default: pick, or the CLI's own default)")
 	f.StringVar(&w.effort, "effort", "", "reasoning effort where the CLI supports it, e.g. low, medium, high (default: the CLI's own)")
-	f.StringVar(&w.maxAccess, "access", "readonly", "what MIA's turns may do: readonly, confirm, full")
-	f.StringVar(&w.workdir, "workdir", "", "folder the agent works in (default: here)")
+	f.StringVar(&w.maxAccess, "access", "readonly", "the most access this computer allows: readonly (meeting only), confirm (ask first), full")
+	f.StringVar(&w.workdir, "workdir", "", "folder the agent works in (default: the last setup's, else ~/MeetStream Agent)")
+	f.StringVar(&w.owner, "owner", "", "your name as it shows in meetings (default: the last setup's, else $USER)")
+	f.BoolVar(&w.testFlag, "test", false, "run the test turn even without a terminal (--no-input, --json)")
+	f.BoolVar(&w.newAgent, "new-agent", false, "create a new MIA agent instead of updating the one the last setup made")
 	f.StringVar(&w.configID, "agent-config", "", "update this MIA agent instead of creating one (keeps its voice and prompts)")
 	f.StringVar(&w.name, "name", "", "name of the new MIA agent")
 	f.BoolVar(&w.dryRun, "dry-run", false, "print the MIA agent request and its price without sending it")
@@ -905,11 +937,13 @@ func (w *setupWizard) finish() error {
 			modelBlock["model"] = w.model // MIA passes model.model to the agent CLI; "" keeps the CLI's default
 		}
 		body["model"] = modelBlock
-		local = map[string]any{"agent": w.spec.Name, "model": w.model, "effort": w.effort, "workdir": w.workdir}
+		local = map[string]any{"agent": w.spec.Name, "model": w.model, "effort": w.effort, "workdir": w.workdir,
+			"access": w.maxAccess, "owner": w.owner, "ignore_rules": w.ignoreRules, "meeting_md": w.useMeetingMD, "test": w.testResult}
 	}
 	q := w.quote()
+	target := w.targetID()
 	if w.dryRun {
-		out := map[string]any{"dry_run": true, "mode": w.mode, "method": map[bool]string{true: "PUT", false: "POST"}[w.configID != ""], "agent_config_id": w.configID, "body": body}
+		out := map[string]any{"dry_run": true, "mode": w.mode, "method": map[bool]string{true: "PUT", false: "POST"}[target != ""], "agent_config_id": target, "body": body}
 		if local != nil {
 			out["setup"] = local
 		}
@@ -931,38 +965,53 @@ func (w *setupWizard) finish() error {
 	c := api.New(config.APIURL(), key, w.info.Version)
 	var resp any
 	var err error
-	if w.configID != "" {
+	if target != "" {
 		// Update only the model block of an existing agent; keep its voice, prompts and tools.
 		var existing map[string]any
-		if err := c.Do(cmd.Context(), http.MethodGet, "/mia?agent_config_id="+w.configID, nil, &existing); err != nil {
+		err = c.Do(cmd.Context(), http.MethodGet, "/mia?agent_config_id="+target, nil, &existing)
+		var ae *api.Error
+		if err != nil && target != w.configID && errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+			// The last setup's agent was deleted: make a new one.
+			if !g.JSON {
+				ui.Note("Your last MIA agent (" + target + ") is gone; creating a new one.")
+			}
+			target, w.newAgent, err = "", true, nil
+			q = w.quote()
+		} else if err != nil {
 			return apiError(err)
 		}
-		cfg := existing
-		if inner, ok := existing["agent_config"].(map[string]any); ok {
-			cfg = inner
+		if target != "" {
+			cfg := existing
+			if inner, ok := existing["agent_config"].(map[string]any); ok {
+				cfg = inner
+			}
+			cfg["agent_config_id"] = target
+			cfg["model"] = body["model"]
+			b, _ := json.Marshal(cfg)
+			err = c.Do(cmd.Context(), http.MethodPut, "/mia", bytes.NewReader(b), &resp)
 		}
-		cfg["agent_config_id"] = w.configID
-		cfg["model"] = body["model"]
-		b, _ := json.Marshal(cfg)
-		err = c.Do(cmd.Context(), http.MethodPut, "/mia", bytes.NewReader(b), &resp)
-	} else {
+	}
+	if target == "" {
 		b, _ := json.Marshal(body)
 		err = c.Do(cmd.Context(), http.MethodPost, "/mia", bytes.NewReader(b), &resp)
 	}
 	if err != nil {
 		var ae *api.Error
-		if errors.As(err, &ae) && w.mode == modeLocal && strings.Contains(ae.Detail(), "relay") {
-			return &ExitError{Code: 1, Message: ae.Detail(), Hint: "relay agents are on for test stacks first; point MEETSTREAM_API_URL at one"}
+		if errors.As(err, &ae) && w.mode == modeLocal && relayRefused(ae) {
+			return errRelayNotEnabled() // never the raw API text: the server only knows tunnel agents
 		}
 		if errors.As(err, &ae) && ae.Status == http.StatusBadRequest && strings.Contains(ae.Detail(), "API key") {
-			return &ExitError{Code: 1, Message: ae.Detail(), Hint: "add your provider keys in the dashboard: " + keysURL}
+			return &ExitError{Code: 1, Message: ae.Detail(), Hint: "add your provider keys in the dashboard: " + keysURL()}
 		}
 		return apiError(err)
 	}
 	m, _ := resp.(map[string]any)
-	id := w.configID
+	id := target
 	if m != nil && id == "" {
 		id = first(m, "agent_config_id", "id")
+	}
+	if w.mode == modeLocal && w.configID == "" {
+		w.miaID = id // the next setup updates this one
 	}
 	var fallback []string
 	if list, ok := m["managed_key_sections"].([]any); ok {
@@ -978,11 +1027,11 @@ func (w *setupWizard) finish() error {
 
 	out := map[string]any{"mode": w.mode, "agent_config_id": id, "name": name}
 	if w.mode == modeLocal {
-		saved := kitconfig.Setup{Agent: w.spec.Name, Workdir: w.workdir, MaxAccess: w.maxAccess, Tunnel: "relay", Model: w.model, Effort: w.effort}
-		if err := saved.Save(""); err != nil {
+		if err := w.saved().Save(""); err != nil {
 			return err
 		}
-		for k, v := range map[string]any{"agent": w.spec.Name, "device_id": w.creds.DeviceID, "access": w.maxAccess, "workdir": w.workdir, "model": w.model, "effort": w.effort} {
+		for k, v := range map[string]any{"agent": w.spec.Name, "device_id": w.creds.DeviceID, "access": w.maxAccess, "workdir": w.workdir, "model": w.model, "effort": w.effort,
+			"owner": w.owner, "ignore_rules": w.ignoreRules, "meeting_md": w.useMeetingMD, "test": w.testResult, "login": w.loginState, "updated": target != ""} {
 			out[k] = v
 		}
 	}
@@ -1001,20 +1050,34 @@ func (w *setupWizard) finish() error {
 				words[i] = sectionWord[s]
 			}
 			ui.Warn("No saved key for the " + strings.Join(words, " and ") + ": " + map[bool]string{true: "it runs", false: "they run"}[len(words) == 1] + " on MeetStream keys instead, billed per hour.")
-			ui.Note("Add your keys in the dashboard (" + keysURL + "), then edit the agent to use them.")
+			ui.Note("Add your keys in the dashboard (" + keysURL() + "), then edit the agent to use them.")
 		} else if ownKeys {
-			ui.Note("Add your provider keys in the dashboard: " + keysURL + " (setup never asks for keys)")
+			ui.Note("Add your provider keys in the dashboard: " + keysURL() + " (setup never asks for keys)")
 		}
 		ui.OK("MIA agent " + ui.BoldStyle.Render(name) + "  " + ui.DimStyle.Render(id))
 		fmt.Fprintln(ui.Out)
 		rows := [][2]string{{"price", q.breakdown()}}
 		if w.mode == modeLocal {
-			rows = append([][2]string{{"agent", w.spec.Label}, {"model", orDefault(w.model, "the CLI's default")}, {"effort", orDefault(w.effort, "the CLI's default")}, {"access", w.maxAccess}, {"folder", ui.ShortPath(w.workdir)}}, rows...)
+			how := "one run per turn"
+			if w.spec.Warm != "" {
+				how = "warm session per meeting"
+			}
+			rows = append([][2]string{{"agent", w.spec.Label + " (" + how + ")"}, {"model", orDefault(w.model, "the CLI's default")}, {"effort", orDefault(w.effort, "the CLI's default")},
+				{"access", w.maxAccess}, {"folder", ui.ShortPath(w.workdir)}, {"context", meetingctx.Summary(w.spec, w.workdir, w.ignoreRules, w.useMeetingMD)},
+				{"your name", orDefault(w.owner, "-")}, {"test", orDefault(w.testResult, "skipped")}}, rows...)
 		} else {
 			rows = append([][2]string{{"ears", w.pickText(secEars)}, {"brain", w.pickText(secBrain)}, {"voice", w.pickText(secVoice)}}, rows...)
 		}
 		ui.Box("Ready", append(rows, [2]string{"mia agent", id}))
 		if w.mode == modeLocal {
+			if w.loginState == "expired" {
+				ui.Fail(w.spec.Label + " is signed out. Sign in again with:")
+				ui.Command(w.spec.Relogin)
+			}
+			if w.maxAccess == "full" {
+				ui.Warn("FULL access: the agent may run shell commands and change files without asking, but only in")
+				ui.Note("meetings where only you (by verified id or activation code) can talk to it; otherwise it asks.")
+			}
 			ui.Note("Start your agent, then send MIA to a meeting:")
 			ui.Command("meetstream agent serve")
 		} else {

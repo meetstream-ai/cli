@@ -120,13 +120,23 @@ func twoModels(efforts ...string) models.Catalog {
 	return models.Catalog{Models: []models.Choice{{ID: "m1"}, {ID: "m2"}}, DefaultModel: "m1", Efforts: efforts, Source: "test"}
 }
 
-// setupFakes: no CLI listing, no shared-estimates fetch, no warm agent.
+// setupFakes: no CLI listing, no shared-estimates fetch, no warm agent, a
+// test turn that answers, and no sign-in command run.
 func setupFakes(t *testing.T, c models.Catalog) {
 	t.Helper()
 	swap(t, &setupCatalog, catalogOf(c))
 	swap(t, &setupShared, func() []estimates.Entry { return nil })
 	swap(t, &setupWarmCheck, func(context.Context, kitconfig.Config, warmcheck.Options) warmcheck.Result {
-		return warmcheck.Result{OK: true, Message: "meeting tools loaded"}
+		return warmcheck.Result{OK: true, Message: "Warm mode (ACP) ready · meeting tools work (test tool called)"}
+	})
+	swap(t, &setupTestTurn, func(_ context.Context, _ kitconfig.Config, onStage func(string, time.Duration)) testTurn {
+		onStage("output", 300*time.Millisecond)
+		onStage("first_delta", 900*time.Millisecond)
+		return testTurn{Answer: "ready", Total: 1200 * time.Millisecond}
+	})
+	swap(t, &setupSignIn, func(argv []string) int {
+		t.Errorf("sign-in ran: %v", argv)
+		return 1
 	})
 }
 
@@ -182,7 +192,8 @@ func TestEveryStepGoesBackWithoutCrashing(t *testing.T) {
 	if !contains(drv.asked, modeQuestion) || strings.Count(strings.Join(drv.asked, "|"), agentQuestion) < 2 {
 		t.Errorf("Back from the agent picker did not return to step 1: %v", drv.asked)
 	}
-	for _, q := range []string{agentQuestion, "Which model?", effortQuestion, "Ears and voice for your agent?", "Connect this computer to MeetStream?",
+	for _, q := range []string{agentQuestion, "Which model?", effortQuestion, "Folder your agent works in", "Most access this computer allows",
+		"Your name as it shows in meetings", "Ears and voice for your agent?", "Connect this computer to MeetStream?",
 		"Create the MIA agent for Antigravity CLI?", "Connect your calendar so MIA can join your meetings?"} {
 		if !drv.backed[q] {
 			t.Errorf("Back never pressed at %q (asked %v)", q, drv.asked)
@@ -198,14 +209,24 @@ func TestEveryStepGoesBackWithoutCrashing(t *testing.T) {
 	if model["model"] != "m1" || model["provider"] != "local_agent" || voice["provider"] != "elevenlabs" || voice["key_source"] != "meetstream" {
 		t.Fatalf("created %+v", created)
 	}
-	for _, want := range []string{"1/7", "2/7", "7/7", "2 models from test", "Model: m1", "isn't available on this server yet", "meetstream calendar connect"} {
+	for _, want := range []string{"1/11", "2/11", "7/11", "11/11", "2 models from test", "Model: m1", "isn't available on this server yet", "meetstream calendar connect",
+		"Created ~/MeetStream Agent", "Meeting context: meeting only", "edit with: meetstream agent context edit", "Access: Meeting only",
+		"Woke Antigravity CLI", "First words", "Answered", "Antigravity CLI answered in 1.2 s: ready", "Warm mode (ACP) ready · meeting tools work (test tool called) (",
+		"warm session per meeting"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "Warm mode (ACP): Warm mode") {
+		t.Errorf("warm text doubled:\n%s", out)
+	}
 	saved, err := kitconfig.LoadSetup("")
-	if err != nil || saved.Agent != "agy" || saved.Model != "m1" || saved.Effort != "" {
+	if err != nil || saved.Agent != "agy" || saved.Model != "m1" || saved.Effort != "" || saved.MaxAccess != "readonly" ||
+		!strings.HasSuffix(saved.Workdir, "MeetStream Agent") || saved.MIAAgentID != "cfg_test" {
 		t.Fatalf("saved %+v %v", saved, err)
+	}
+	if _, err := os.Stat(filepath.Join(saved.Workdir, "MEETING.md")); err != nil {
+		t.Fatal("MEETING.md not created:", err)
 	}
 }
 

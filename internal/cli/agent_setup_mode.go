@@ -29,9 +29,6 @@ const (
 	secBrain = "model"
 	secVoice = "voice"
 
-	// keysURL is where provider keys are added (the dashboard's Integrations page).
-	keysURL = "https://app.meetstream.ai/integrations"
-
 	modeQuestion = "How should MIA run in your meetings?"
 )
 
@@ -533,4 +530,13 @@ func modeMenu(c miaCatalog, current string) stepMenuModel {
 	m := newStepMenu(modeQuestion, labels...).withHints(hints).withDetails(details).at(cursor)
 	m.disabled, m.noBack = disabled, true
 	return m
+}
+
+// keysURL is where provider keys are added: the dashboard's Integrations page
+// on MeetStream, or that page of a test server's own dashboard.
+func keysURL() string {
+	if prodAPI() {
+		return "https://app.meetstream.ai/integrations"
+	}
+	return "Integrations in the dashboard of " + serverLabel()
 }

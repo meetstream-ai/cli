@@ -24,6 +24,9 @@ type Config struct {
 	Confirm                                                                    func(description string) bool
 	// Event carries operational metadata only, never turn text, secrets, or participant identity.
 	Event func(kind string, fields map[string]any)
+	// Log is the bridge terminal's own lines (the kit's "[turn] Sam: …"); they
+	// may quote the meeting, so they go to the person's terminal and nowhere else.
+	Log func(line string)
 }
 
 func (c Config) Defaults() Config {
@@ -47,6 +50,9 @@ func (c Config) Defaults() Config {
 	}
 	if c.Event == nil {
 		c.Event = func(string, map[string]any) {}
+	}
+	if c.Log == nil {
+		c.Log = func(string) {}
 	}
 	return c
 }

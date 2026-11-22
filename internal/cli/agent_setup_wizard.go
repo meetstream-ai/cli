@@ -47,6 +47,7 @@ type stepMenuModel struct {
 	details  []string // the line under the menu for the highlighted row (optional)
 	disabled []bool   // rows that cannot be chosen (dimmed; their hint says why)
 	noBack   bool     // the first question: no Back row, Esc cancels setup
+	quitRow  bool     // a "Quit" row after the Back row (menuQuit, like q)
 	cursor   int
 	result   menuResult
 	chosen   int
@@ -71,18 +72,35 @@ func (m stepMenuModel) at(i int) stepMenuModel {
 	return m
 }
 
+// withQuit adds a "Quit" row after the Back row.
+func (m stepMenuModel) withQuit() stepMenuModel { m.quitRow = true; return m }
+
+const quitLabel = "Quit"
+
+// quitDetail is the Quit row's detail line.
+const quitDetail = "Stop setup here. Your answers so far are saved."
+
 func (m stepMenuModel) rows() int {
-	if m.noBack {
-		return len(m.options)
+	n := len(m.options)
+	if !m.noBack {
+		n++
 	}
-	return len(m.options) + 1
+	if m.quitRow {
+		n++
+	}
+	return n
 }
+
+// isQuit is whether row i is the Quit row.
+func (m stepMenuModel) isQuit(i int) bool { return m.quitRow && i == m.rows()-1 }
 
 func (m stepMenuModel) isDisabled(i int) bool { return i < len(m.disabled) && m.disabled[i] }
 
 // detail is the highlighted row's detail line, "" when it has none.
 func (m stepMenuModel) detail(i int) string {
 	switch {
+	case m.isQuit(i):
+		return quitDetail
 	case i == len(m.options) && !m.noBack:
 		return backDetail
 	case i < len(m.details):
@@ -113,7 +131,9 @@ func (m stepMenuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.isDisabled(m.cursor) {
 			return m, nil // not offered: its hint says why
 		}
-		if m.cursor == len(m.options) {
+		if m.isQuit(m.cursor) {
+			m.result = menuQuit
+		} else if m.cursor == len(m.options) {
 			m.result = menuBack
 		} else {
 			m.result, m.chosen = menuChosen, m.cursor
@@ -135,9 +155,12 @@ func (m stepMenuModel) View() string {
 	if !m.noBack {
 		labels = append(labels, backLabel)
 	}
+	if m.quitRow {
+		labels = append(labels, quitLabel)
+	}
 	for i, label := range labels {
 		pointer, title := "  ", label
-		if i == len(m.options) || m.isDisabled(i) {
+		if i >= len(m.options) || m.isDisabled(i) {
 			title = ui.DimStyle.Render(label)
 		}
 		if i == m.cursor {

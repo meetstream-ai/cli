@@ -23,6 +23,9 @@ type Setup struct {
 	Effort      string `json:"effort"`
 	// AutoStart "yes" starts your agent for meetings when the home app opens (default off).
 	AutoStart string `json:"auto_start,omitempty"`
+	// MIAAgentID is the MIA agent setup created for this computer; running setup
+	// again updates it instead of creating another.
+	MIAAgentID string `json:"mia_agent_id,omitempty"`
 }
 
 func LoadSetup(dir string) (*Setup, error) {
