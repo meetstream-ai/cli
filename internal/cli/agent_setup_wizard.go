@@ -45,6 +45,8 @@ type stepMenuModel struct {
 	options  []string // without the Back row; it is always last
 	hints    []string // dim text beside a row (optional)
 	details  []string // the line under the menu for the highlighted row (optional)
+	disabled []bool   // rows that cannot be chosen (dimmed; their hint says why)
+	noBack   bool     // the first question: no Back row, Esc cancels setup
 	cursor   int
 	result   menuResult
 	chosen   int
@@ -69,12 +71,19 @@ func (m stepMenuModel) at(i int) stepMenuModel {
 	return m
 }
 
-func (m stepMenuModel) rows() int { return len(m.options) + 1 }
+func (m stepMenuModel) rows() int {
+	if m.noBack {
+		return len(m.options)
+	}
+	return len(m.options) + 1
+}
+
+func (m stepMenuModel) isDisabled(i int) bool { return i < len(m.disabled) && m.disabled[i] }
 
 // detail is the highlighted row's detail line, "" when it has none.
 func (m stepMenuModel) detail(i int) string {
 	switch {
-	case i == len(m.options):
+	case i == len(m.options) && !m.noBack:
 		return backDetail
 	case i < len(m.details):
 		return m.details[i]
@@ -101,6 +110,9 @@ func (m stepMenuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "down", "j", "tab":
 		m.cursor = (m.cursor + 1) % m.rows()
 	case "enter":
+		if m.isDisabled(m.cursor) {
+			return m, nil // not offered: its hint says why
+		}
 		if m.cursor == len(m.options) {
 			m.result = menuBack
 		} else {
@@ -119,13 +131,20 @@ func (m stepMenuModel) View() string {
 	for _, o := range m.options {
 		width = max(width, lipgloss.Width(o))
 	}
-	for i, label := range append(append([]string{}, m.options...), backLabel) {
+	labels := append([]string{}, m.options...)
+	if !m.noBack {
+		labels = append(labels, backLabel)
+	}
+	for i, label := range labels {
 		pointer, title := "  ", label
-		if i == len(m.options) {
+		if i == len(m.options) || m.isDisabled(i) {
 			title = ui.DimStyle.Render(label)
 		}
 		if i == m.cursor {
 			pointer, title = sel.Render("❯ "), sel.Render(label)
+			if m.isDisabled(i) {
+				title = ui.DimStyle.Render(label)
+			}
 		}
 		line := "  " + pointer + title
 		if i < len(m.hints) && m.hints[i] != "" {
@@ -141,7 +160,11 @@ func (m stepMenuModel) View() string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n  " + ui.DimStyle.Render("↑/↓ move · enter choose · esc back · q quit") + "\n")
+	keys := "↑/↓ move · enter choose · esc back · q quit"
+	if m.noBack {
+		keys = "↑/↓ move · enter choose · esc/q quit"
+	}
+	b.WriteString("\n  " + ui.DimStyle.Render(keys) + "\n")
 	return b.String()
 }
 

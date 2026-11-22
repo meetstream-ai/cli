@@ -50,6 +50,8 @@ func questionOf(m tea.Model) string {
 		return mm.question
 	case textPromptModel:
 		return mm.question
+	case pickModel:
+		return agentQuestion
 	}
 	return ""
 }
@@ -86,6 +88,9 @@ func (d *backOnce) run(m tea.Model) (tea.Model, error) {
 	}
 	q := questionOf(m)
 	d.asked = append(d.asked, q)
+	if sm, ok := m.(stepMenuModel); ok && sm.noBack { // step 1: Esc there cancels setup
+		return press(m, "enter")
+	}
 	if q != "" && !d.backed[q] {
 		d.backed[q] = true
 		return press(m, "esc")
@@ -145,6 +150,10 @@ func TestEveryStepGoesBackWithoutCrashing(t *testing.T) {
 	var mu sync.Mutex
 	var created map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/mia") {
+			_, _ = w.Write([]byte(`{"agent_configs":[],"mia_managed":` + demoCatalog + `}`))
+			return
+		}
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/mia") {
 			b, _ := io.ReadAll(r.Body)
 			mu.Lock()
@@ -170,7 +179,10 @@ func TestEveryStepGoesBackWithoutCrashing(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d\n%s\nasked %v", code, out, drv.asked)
 	}
-	for _, q := range []string{"Which model?", effortQuestion, "Connect this computer to MeetStream?",
+	if !contains(drv.asked, modeQuestion) || strings.Count(strings.Join(drv.asked, "|"), agentQuestion) < 2 {
+		t.Errorf("Back from the agent picker did not return to step 1: %v", drv.asked)
+	}
+	for _, q := range []string{agentQuestion, "Which model?", effortQuestion, "Ears and voice for your agent?", "Connect this computer to MeetStream?",
 		"Create the MIA agent for Antigravity CLI?", "Connect your calendar so MIA can join your meetings?"} {
 		if !drv.backed[q] {
 			t.Errorf("Back never pressed at %q (asked %v)", q, drv.asked)
@@ -182,10 +194,11 @@ func TestEveryStepGoesBackWithoutCrashing(t *testing.T) {
 	mu.Lock()
 	model, _ := created["model"].(map[string]any)
 	mu.Unlock()
-	if model["model"] != "m1" || model["provider"] != "local_agent" {
+	voice, _ := created["voice"].(map[string]any)
+	if model["model"] != "m1" || model["provider"] != "local_agent" || voice["provider"] != "elevenlabs" || voice["key_source"] != "meetstream" {
 		t.Fatalf("created %+v", created)
 	}
-	for _, want := range []string{"1/5", "2/5", "5/5", "2 models from test", "Model: m1", "isn't available on this server yet", "meetstream calendar connect"} {
+	for _, want := range []string{"1/7", "2/7", "7/7", "2 models from test", "Model: m1", "isn't available on this server yet", "meetstream calendar connect"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
@@ -523,7 +536,7 @@ func TestSetupModelView(t *testing.T) {
 	menu, _, _ := modelMenu(agents.All["claude"], listed, "", cached)
 	out := captureUI(t)
 	g = globals{}
-	ui.Step(2, setupSteps, "Model and effort")
+	ui.Step(3, 7, "Model and effort")
 	ui.OK(listed.Summary("Claude Code"))
 	view := out.String() + menu.View()
 	for _, want := range []string{"4 models from claude --help", "≈$", "plan", "/h", measureLabel, backLabel} {

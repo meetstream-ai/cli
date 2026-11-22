@@ -1,15 +1,16 @@
 #!/bin/sh
-# Renders the home screen, setup's model step, the bench table and `doctor` to
-# PNGs in docs/images (needs charm freeze). Everything runs against a fake home
-# with fake agent CLIs and stub data, so no real device, account or path shows.
+# Renders the home screen, setup's step 1 (how MIA runs, demo prices) and its
+# model step, the bench table and `doctor` to PNGs in docs/images (needs charm
+# freeze). Everything runs against a fake home with fake agent CLIs and stub
+# data, so no real device, account or path shows.
 set -e
 cd "$(dirname "$0")/.."
 out=$(mktemp -d)
 demo=/tmp/meetstream-demo # short, neutral paths in the doctor output
 rm -rf "$demo" && mkdir -p "$demo/bin" "$demo/home/meetings" "$demo/kit" "$demo/cfg"
 FREEZE="--language ansi --window --theme dracula --padding 20,40 --font.size 15 --border.radius 8"
-FORCE_COLOR=1 MEETSTREAM_DUMP_HOME="$out/home" MEETSTREAM_DUMP_SETUP_MODEL="$out/setup-model" MEETSTREAM_DUMP_BENCH="$out/bench" \
-	go test ./internal/cli -run 'TestHomeView|TestSetupModelView|TestBenchTableView' -count=1 </dev/null >/dev/null
+FORCE_COLOR=1 MEETSTREAM_DUMP_HOME="$out/home" MEETSTREAM_DUMP_SETUP_MODEL="$out/setup-model" MEETSTREAM_DUMP_SETUP_MODE="$out/setup-mode" MEETSTREAM_DUMP_BENCH="$out/bench" \
+	go test ./internal/cli -run 'TestHomeView|TestSetupModelView|TestSetupModeView|TestBenchTableView' -count=1 </dev/null >/dev/null
 go build -o dist-local/meetstream ./cmd/meetstream </dev/null
 
 # Fake agent CLI (signed in) and a fake computer name for the relay line.
@@ -24,6 +25,7 @@ printf '{"agent":"claude","workdir":"%s","max_access":"readonly","tunnel":"relay
 
 freeze "$out/home" $FREEZE -o docs/images/home.png </dev/null
 freeze "$out/setup-model" $FREEZE -o docs/images/setup-model.png </dev/null
+freeze "$out/setup-mode" $FREEZE -o docs/images/setup-mode.png </dev/null
 freeze "$out/bench" $FREEZE -o docs/images/bench.png </dev/null
 freeze "$out/doctor" $FREEZE -o docs/images/doctor.png </dev/null
 rm -rf "$out" "$demo"

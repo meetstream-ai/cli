@@ -1,5 +1,5 @@
 // Package relay connects this computer out to MeetStream's agent relay
-//, so MIA reaches the local bridge with no tunnel and no pairing key.
+// , so MIA reaches the local bridge with no tunnel and no pairing key.
 //
 // Sign-in is the hosted MCP's OAuth with the static public client
 // "meetstream-agent-kit" and scope "local_agent" (wire contract:

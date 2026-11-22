@@ -220,12 +220,16 @@ func key(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-// Step 1: Esc cancels (setup returns exit 130); Enter picks.
+// The agent picker: Esc goes back to step 1, q cancels (exit 130); Enter picks.
 func TestPickModelEscCancels(t *testing.T) {
 	items := []agentChoice{{name: "claude", label: "Claude Code"}, {name: "muse", label: "Muse Code"}}
 	m, cmd := pickModel{items: items}.Update(key("esc"))
-	if !isQuit(cmd) || m.(pickModel).chosen != nil {
-		t.Fatal("esc at step 1 should quit with nothing chosen")
+	if !isQuit(cmd) || m.(pickModel).chosen != nil || !m.(pickModel).back {
+		t.Fatal("esc in the agent picker should go back to step 1 with nothing chosen")
+	}
+	m, cmd = pickModel{items: items}.Update(key("q"))
+	if !isQuit(cmd) || m.(pickModel).chosen != nil || m.(pickModel).back {
+		t.Fatal("q in the agent picker should cancel")
 	}
 	m, _ = pickModel{items: items}.Update(key("down"))
 	m, cmd = m.Update(key("enter"))
