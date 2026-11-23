@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -74,8 +75,9 @@ func pathHint(c agentChoice) {
 		return
 	}
 	dir := filepath.Dir(c.binary)
-	ui.Warn("`" + filepath.Base(c.binary) + "` is in " + ui.ShortPath(dir) + ", which is not on your PATH. Add it to your shell profile:")
-	ui.Command(`export PATH="` + dir + `:$PATH"`)
+	lead, command := checks.PathHint(dir, runtime.GOOS == "windows")
+	ui.Warn("`" + filepath.Base(c.binary) + "` is in " + ui.ShortPath(dir) + ", which is not on your PATH. " + lead)
+	ui.Command(command)
 }
 
 // ── picker ────────────────────────────────────────────────────────────────────
@@ -318,10 +320,19 @@ func museSay(kind, text string) {
 }
 
 func setupOwner() string {
-	if u := os.Getenv("USER"); u != "" {
+	if u := loginName(); u != "" {
 		return u
 	}
 	return "the user"
+}
+
+// loginName is this computer's user name: $USER, or on Windows (which sets
+// no USER) %USERNAME%.
+func loginName() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return os.Getenv("USERNAME")
 }
 
 // stepModel is step 2: the model and effort. --model/--effort (or a run that

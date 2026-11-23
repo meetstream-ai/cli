@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
+	"github.com/meetstream-ai/cli/internal/agentkit/checks"
 	"github.com/meetstream-ai/cli/internal/ui"
 )
 
@@ -389,15 +390,13 @@ func installDirs() []string {
 	return append(dirs, systemInstallDirs...)
 }
 
-// installedOffPath finds a CLI an installer put in a folder that is not on PATH.
+// installedOffPath finds a CLI an installer put in a folder that is not on PATH
+// (an execute bit, or on Windows a PATHEXT name such as claude.cmd).
 func installedOffPath(binary string) string {
-	for _, dir := range installDirs() {
-		p := filepath.Join(dir, binary)
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
-			return p
-		}
-	}
-	return ""
+	e := agentEnv()
+	e.LookPath = func(string) (string, error) { return "", exec.ErrNotFound } // only the install folders
+	p, _ := checks.ResolveBinary(e, agents.Spec{Binary: binary}, "")
+	return p
 }
 
 // installer runs the offer; its fields are swapped in tests so nothing is installed.
@@ -449,8 +448,9 @@ func (in installer) offer(spec agents.Spec) string {
 		}
 		dir := filepath.Dir(off)
 		_ = os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-		ui.Warn("`" + spec.Binary + "` is in " + ui.ShortPath(dir) + ", which is not on your PATH. Add it to your shell profile:")
-		ui.Command(`export PATH="` + dir + `:$PATH"`)
+		lead, command := checks.PathHint(dir, runtime.GOOS == "windows")
+		ui.Warn("`" + spec.Binary + "` is in " + ui.ShortPath(dir) + ", which is not on your PATH. " + lead)
+		ui.Command(command)
 		found = off
 	}
 	ui.OK(spec.Label + " installed: " + ui.ShortPath(found))

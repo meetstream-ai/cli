@@ -3,6 +3,7 @@ package checks
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
@@ -37,6 +38,10 @@ func TestWindowsExecutablesByPathExt(t *testing.T) {
 	}
 	if p, off := ResolveBinary(e, claude, ""); p != cmd || !off {
 		t.Fatalf("install folder: %q %v", p, off)
+	}
+	// No export or shell profile on Windows: a PowerShell line for the user's Path.
+	if c := Binary(e, claude, ""); !strings.Contains(c.Hint, `SetEnvironmentVariable("Path", "`+dir+`;"`) || strings.Contains(c.Hint, "export") {
+		t.Fatalf("hint %q", c.Hint)
 	}
 	e.GOOS = "linux" // the same file without an execute bit is not a program there
 	if p, _ := ResolveBinary(e, claude, cmd); p != "" {

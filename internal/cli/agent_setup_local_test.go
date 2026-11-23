@@ -26,6 +26,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/meetingctx"
 	"github.com/meetstream-ai/cli/internal/agentkit/relay"
 	"github.com/meetstream-ai/cli/internal/agentkit/warmcheck"
+	"github.com/meetstream-ai/cli/internal/testutil/fakecli"
 )
 
 // localWizard is a wizard on the local-agent path with spec chosen.
@@ -589,14 +590,15 @@ func TestRelayUnsupportedServer(t *testing.T) {
 // A bridge with a stand-in agent (echo, one run per turn): a session, the
 // activation code claimed and released, and a turn print the kit's lines.
 func TestServeLogLinesFromBridge(t *testing.T) {
-	spec, err := agents.Custom("/bin/echo ready")
+	echo := fakecli.Echo(t, t.TempDir(), "echo")
+	spec, err := agents.Custom("'" + echo + "' ready")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
 	var lines, events []string
 	code := ""
-	c := kitconfig.Config{Agent: spec, Binary: "/bin/echo", Workdir: t.TempDir(), RuntimeDir: t.TempDir(),
+	c := kitconfig.Config{Agent: spec, Binary: echo, Workdir: t.TempDir(), RuntimeDir: t.TempDir(),
 		Log:    func(l string) { mu.Lock(); lines = append(lines, l); mu.Unlock() },
 		Event:  func(kind string, f map[string]any) { mu.Lock(); events = append(events, kind); mu.Unlock() },
 		Notify: func(title, text string) { code = regexp.MustCompile(`^\d{6}`).FindString(text) },
@@ -619,7 +621,7 @@ func TestServeLogLinesFromBridge(t *testing.T) {
 	got := strings.Join(lines, "\n")
 	mu.Unlock()
 	for _, want := range []string{
-		"[session] s1: started (/bin/echo, one run per turn, 1 meeting tools, access readonly",
+		"[session] s1: started (" + echo + ", one run per turn, 1 meeting tools, access readonly",
 		"[activate] s1: activated for Nav",
 		"[turn] Sam: Agent, are we on track?",
 		"[done] first output ",

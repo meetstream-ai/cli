@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -233,7 +234,8 @@ func TestCacheRoundTripAndDefaultKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(kit, UsageFile)
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+	// 0600 is a Unix mode; Windows reports 0666 for any writable file (its ACLs keep the profile private).
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", info.Mode().Perm())
 	}
 	raw := readJSONf(t, path).(map[string]any)["claude:"].(map[string]any)

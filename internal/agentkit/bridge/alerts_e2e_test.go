@@ -2,8 +2,6 @@ package bridge
 
 import (
 	"net/http/httptest"
-	"os/exec"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -19,12 +17,9 @@ import (
 // MIA gets a clean error and stays quiet in the meeting; the owner gets one
 // desktop alert per kind of failure per meeting, not one per turn.
 func TestOneAlertPerKindPerMeeting(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is needed for the stub agent")
-	}
 	const outOfCredits = "ERROR: Your workspace is out of credits. Ask your workspace owner to refill in order to continue."
 	t.Setenv("STUB_FAIL_TEXT", outOfCredits)
-	stub, _ := filepath.Abs("testdata/stub_agent.py")
+	stub := stubAgent(t, "claude")
 	dir := t.TempDir()
 	var mu sync.Mutex
 	var sent [][2]string
@@ -39,8 +34,7 @@ func TestOneAlertPerKindPerMeeting(t *testing.T) {
 	hs := httptest.NewServer(srv)
 	t.Cleanup(func() { hs.Close(); srv.Close() })
 
-	res := post(t, hs.URL+"/v1/session/start", token, map[string]any{"session_id": "bot1"})
-	res.Body.Close()
+	startSession(t, hs.URL, token, map[string]any{"session_id": "bot1"})
 	turn := map[string]any{"session_id": "bot1", "messages": []map[string]string{{"speaker": "Nav", "text": "hi"}}}
 	for i := 0; i < 2; i++ {
 		_, last := readTurn(t, post(t, hs.URL+"/v1/turn", token, turn))

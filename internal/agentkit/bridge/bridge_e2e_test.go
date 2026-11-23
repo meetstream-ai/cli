@@ -3,9 +3,9 @@ package bridge
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,16 +14,14 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
 	"github.com/meetstream-ai/cli/internal/agentkit/config"
 	"github.com/meetstream-ai/cli/internal/agentkit/pairing"
+	"github.com/meetstream-ai/cli/internal/testutil/fakecli"
 )
 
 // End to end through the HTTP protocol (docs/protocol.md) with the kit's own
 // stub agent, which speaks Claude Code's stream-json and never calls a model.
 func newStubBridge(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is needed for the stub agent")
-	}
-	stub, _ := filepath.Abs("testdata/stub_agent.py")
+	stub := stubAgent(t, "claude")
 	dir := t.TempDir()
 	spec := agents.All["claude"]
 	srv := New(config.Config{Agent: spec, Binary: stub, Workdir: dir, RuntimeDir: dir, Owner: "Nav", Timeout: 20 * time.Second})
@@ -36,6 +34,26 @@ func newStubBridge(t *testing.T) (*httptest.Server, string) {
 	hs := httptest.NewServer(srv)
 	t.Cleanup(func() { hs.Close(); srv.Close() })
 	return hs, token
+}
+
+// stubAgent is the kit's stub agent as a program called name: Python runs the
+// script, so no shebang or execute bit is needed (Windows has neither).
+func stubAgent(t *testing.T, name string) string {
+	t.Helper()
+	return fakecli.Python(t, t.TempDir(), name, filepath.Join("testdata", "stub_agent.py"))
+}
+
+// startSession starts a session and fails the test at once when the stub
+// agent could not run, instead of at the turn with "unknown session".
+func startSession(t *testing.T, url, token string, body map[string]any) {
+	t.Helper()
+	res := post(t, url+"/v1/session/start", token, body)
+	defer res.Body.Close()
+	var m map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&m)
+	if res.StatusCode != 200 || m["login"] != "ok" {
+		t.Fatalf("session/start %d %v", res.StatusCode, m)
+	}
 }
 
 func post(t *testing.T, url, token string, body any) *http.Response {
@@ -71,14 +89,17 @@ func TestBridgeTurnEndToEnd(t *testing.T) {
 	var started map[string]any
 	_ = json.NewDecoder(res.Body).Decode(&started)
 	res.Body.Close()
-	if res.StatusCode != 200 || started["agent"] != "claude" {
+	// login "ok": the stub agent really ran (a CLI that cannot start is
+	// "not_installed", and then no session exists for the turn).
+	if res.StatusCode != 200 || started["agent"] != "claude" || started["login"] != "ok" {
 		t.Fatalf("session/start %d %v", res.StatusCode, started)
 	}
 
 	res = post(t, hs.URL+"/v1/turn", token, map[string]any{"session_id": "bot_1", "messages": []map[string]string{{"speaker": "Nav", "text": "what is the answer?"}}})
 	defer res.Body.Close()
 	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-ndjson") {
-		t.Fatalf("content-type %q", ct)
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("content-type %q: %d %s", ct, res.StatusCode, b)
 	}
 	var text strings.Builder
 	var done map[string]any
@@ -145,8 +166,7 @@ func readTurn(t *testing.T, res *http.Response) (text string, last map[string]an
 func TestBridgeCancelThenNextTurn(t *testing.T) {
 	t.Setenv("STUB_FIRST_S", "5") // the first answer token takes 5 s
 	hs, token := newStubBridge(t)
-	res := post(t, hs.URL+"/v1/session/start", token, map[string]any{"session_id": "bot_2"})
-	res.Body.Close()
+	startSession(t, hs.URL, token, map[string]any{"session_id": "bot_2"})
 
 	got := make(chan map[string]any, 1)
 	go func() {
@@ -156,7 +176,7 @@ func TestBridgeCancelThenNextTurn(t *testing.T) {
 	}()
 	time.Sleep(700 * time.Millisecond)
 	start := time.Now()
-	res = post(t, hs.URL+"/v1/cancel", token, map[string]any{"session_id": "bot_2"})
+	res := post(t, hs.URL+"/v1/cancel", token, map[string]any{"session_id": "bot_2"})
 	res.Body.Close()
 	select {
 	case last := <-got:

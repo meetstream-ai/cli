@@ -197,11 +197,21 @@ func Binary(e Env, spec agents.Spec, override string) Check {
 		}
 		return Check{"agent", Fail, fmt.Sprintf("%s not found (%s)", spec.Label, shown), spec.InstallHint}
 	case offPath:
-		dir := filepath.Dir(path)
-		return Check{"agent", Warn, fmt.Sprintf("%s: %s (its folder is not on your PATH)", spec.Label, path),
-			fmt.Sprintf(`Add it to your shell profile: export PATH="%s:$PATH"`, dir)}
+		lead, command := PathHint(filepath.Dir(path), e.windows())
+		return Check{"agent", Warn, fmt.Sprintf("%s: %s (its folder is not on your PATH)", spec.Label, path), lead + " " + command}
 	}
 	return Check{"agent", OK, spec.Label + ": " + path, ""}
+}
+
+// PathHint is how to put dir on PATH for good: an export line for the shell
+// profile, or on Windows (no export, no profile) a PowerShell line that adds
+// it to the user's Path.
+func PathHint(dir string, windows bool) (lead, command string) {
+	if windows {
+		return "Add it to your PATH (in PowerShell, then open a new terminal):",
+			`[Environment]::SetEnvironmentVariable("Path", "` + dir + `;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")`
+	}
+	return "Add it to your shell profile:", `export PATH="` + dir + `:$PATH"`
 }
 
 // MuseApp: Muse's launcher without the app it downloads. ok is false for every
@@ -256,7 +266,7 @@ func Home(e Env, home string) Check {
 func Port(e Env, port int) Check {
 	ln, err := e.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) {
+		if addrInUse(err) {
 			return Check{"port", Fail, fmt.Sprintf("port %d is used by another program (maybe a bridge already running)", port),
 				fmt.Sprintf("Start the bridge with another --port, or free port %d.", port)}
 		}
@@ -264,6 +274,16 @@ func Port(e Env, port int) Check {
 	}
 	_ = ln.Close()
 	return Check{"port", OK, fmt.Sprintf("127.0.0.1:%d is free", port), ""}
+}
+
+// wsaeaddrinuse is Windows' "Only one usage of each socket address …"
+// (WSAEADDRINUSE). syscall.EADDRINUSE there is Go's own number, which no
+// Windows call returns.
+const wsaeaddrinuse syscall.Errno = 10048
+
+func addrInUse(err error) bool {
+	var errno syscall.Errno
+	return errors.Is(err, syscall.EADDRINUSE) || (runtime.GOOS == "windows" && errors.As(err, &errno) && errno == wsaeaddrinuse)
 }
 
 // Login turns the login package's status (State, Detail) into a check.

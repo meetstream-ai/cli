@@ -148,7 +148,7 @@ func TestM3BMiaApply(t *testing.T) {
 
 func TestM3BMCP(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	path := filepath.Join(home, ".cursor", "mcp.json")
 	out, code := run(t, nil, "mcp", "add", "cursor", "--json")
 	if code != 0 || !strings.Contains(out, hostedMCPURL) {
@@ -298,7 +298,7 @@ func TestM3BCalendarConnect(t *testing.T) {
 
 func TestM3BCodexWrite(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	path := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)

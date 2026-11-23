@@ -356,7 +356,7 @@ func (w *setupWizard) stepAccess() (bool, menuResult, error) {
 func (w *setupWizard) stepName() (bool, menuResult, error) {
 	w.step("Your name")
 	if w.owner == "" {
-		w.owner = os.Getenv("USER")
+		w.owner = loginName()
 	}
 	asked := false
 	if w.interactive && !w.ownerFlag {

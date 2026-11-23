@@ -83,7 +83,9 @@ func (s *Server) Start(ctx context.Context, id string, settings session.Settings
 	if old != nil {
 		old.Close()
 	}
-	_ = newSession.Start(ctx)
+	if err := newSession.Start(ctx); err != nil { // the turn reports it to MIA; the terminal hears it now
+		s.Config.Log("[error] " + id + ": " + s.Config.Agent.Label + " did not start: " + redact.Secrets(clip(err.Error(), 200)))
+	}
 	return newSession, false
 }
 
@@ -333,6 +335,19 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, body map[string]a
 	}
 	login := s.loginPayload(true)
 	if login["login"] == "expired" || login["login"] == "not_installed" {
+		// No session: MIA reads why from this reply. Say it here too, or the
+		// terminal shows nothing until a turn fails with "unknown session".
+		why := "needs sign-in"
+		if s.Config.Agent.Relogin != "" {
+			why += " (run: " + s.Config.Agent.Relogin + ")"
+		}
+		if login["login"] == "not_installed" {
+			why = "is not installed or cannot run"
+		}
+		if detail := parsers.Str(login["login_detail"]); detail != "" {
+			why += ": " + detail
+		}
+		s.Config.Log(fmt.Sprintf("[session] %s: not started: %s %s", id, s.Config.Agent.Label, why))
 		jsonReply(w, 200, merge(map[string]any{"agent": s.Config.Agent.Name, "warm": false}, login))
 		return
 	}

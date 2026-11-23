@@ -5,22 +5,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
 	"github.com/meetstream-ai/cli/internal/agentkit/meetingctx"
 	"github.com/meetstream-ai/cli/internal/agentkit/warmcheck"
+	"github.com/meetstream-ai/cli/internal/testutil/fakecli"
 )
 
+// exe puts a program called name in dir (name.exe on Windows) and returns its path.
 func exe(t *testing.T, dir, name string) string {
 	t.Helper()
-	_ = os.MkdirAll(dir, 0o755)
-	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return p
+	return fakecli.Program(t, dir, name)
 }
 
 // env with an empty PATH and the given install folders.
@@ -49,7 +47,11 @@ func TestResolveBinaryFindsAnOffPathInstall(t *testing.T) {
 		t.Fatalf("p=%q off=%v", p, off)
 	}
 	c := Binary(e, claude, "")
-	if c.Status != Warn || !strings.Contains(c.Hint, `export PATH="`+local+`:$PATH"`) {
+	wantHint := `export PATH="` + local + `:$PATH"`
+	if runtime.GOOS == "windows" {
+		wantHint = `[Environment]::SetEnvironmentVariable("Path", "` + local + `;"`
+	}
+	if c.Status != Warn || !strings.Contains(c.Hint, wantHint) {
 		t.Fatalf("%+v", c)
 	}
 	e.LookPath = func(string) (string, error) { return "/usr/bin/claude", nil }

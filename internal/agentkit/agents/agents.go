@@ -2,6 +2,7 @@ package agents
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 )
 
@@ -105,15 +106,27 @@ func (s Spec) EffortFlags(e string) []string {
 }
 
 // SplitCommand parses shell quoting without invoking a shell or expanding variables.
+// On Windows a backslash is the path separator (C:\tools\agent.exe), so there it
+// escapes only a double quote and is otherwise kept as typed.
 func SplitCommand(command string) ([]string, error) {
+	return splitCommand(command, runtime.GOOS == "windows")
+}
+
+func splitCommand(command string, windows bool) ([]string, error) {
 	var args []string
 	var b strings.Builder
 	var quote rune
 	escaped, word := false, false
-	for _, r := range command {
+	runes := []rune(command)
+	for i, r := range runes {
 		if escaped {
 			b.WriteRune(r)
 			escaped = false
+			word = true
+			continue
+		}
+		if r == '\\' && windows && (i+1 == len(runes) || runes[i+1] != '"') {
+			b.WriteRune(r)
 			word = true
 			continue
 		}

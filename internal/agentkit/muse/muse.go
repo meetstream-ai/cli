@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -47,8 +48,23 @@ func LauncherWithoutApp(agentName, binary string) bool {
 	if !versionPattern.MatchString(version) {
 		return true
 	}
-	fi, err := os.Stat(filepath.Join(folder, "muse-bin-"+version))
-	return err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0
+	return !appPresent(filepath.Join(folder, "muse-bin-"+version))
+}
+
+// appPresent: the downloaded app is a regular file with an execute bit. Windows
+// has no execute bits (Go reports none), so there the file itself, with or
+// without .exe, is the app.
+func appPresent(app string) bool {
+	if runtime.GOOS == "windows" {
+		for _, p := range []string{app, app + ".exe"} {
+			if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+				return true
+			}
+		}
+		return false
+	}
+	fi, err := os.Stat(app)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
 }
 
 // Command is a program to run without a shell: Argv plus extra environment

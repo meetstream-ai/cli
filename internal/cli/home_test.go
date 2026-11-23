@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -237,6 +238,25 @@ func TestHomeExecFlowComesBack(t *testing.T) {
 	}
 }
 
+// TestHelperFakeBridge is not a test: run as a child with
+// MEETSTREAM_TEST_FAKE_BRIDGE=<marker>, it is TestHomeAgentToggle's bridge. It
+// leaves the marker, says it connected, and runs until stopped.
+func TestHelperFakeBridge(t *testing.T) {
+	marker := os.Getenv("MEETSTREAM_TEST_FAKE_BRIDGE")
+	if marker == "" {
+		return
+	}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt) // Ctrl-C, or Ctrl-Break on Windows: what the home app sends
+	_ = os.WriteFile(marker, nil, 0o644)
+	os.Stdout.WriteString("connected to MeetStream\n")
+	select {
+	case <-stop:
+	case <-time.After(30 * time.Second):
+	}
+	os.Exit(0)
+}
+
 func TestHomeAgentToggle(t *testing.T) {
 	m := homeFor(t, nil)
 	if err := (kitconfig.Setup{Agent: "claude", Workdir: t.TempDir(), Tunnel: "relay"}).Save(""); err != nil {
@@ -244,8 +264,10 @@ func TestHomeAgentToggle(t *testing.T) {
 	}
 	marker := filepath.Join(t.TempDir(), "ran")
 	old := homeAgentCommand
-	homeAgentCommand = func() *exec.Cmd {
-		return exec.Command("sh", "-c", "touch '"+marker+"'; echo connected to MeetStream; exec sleep 30")
+	homeAgentCommand = func() *exec.Cmd { // this test binary plays the bridge: no shell, so Windows runs it too
+		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperFakeBridge$")
+		cmd.Env = append(os.Environ(), "MEETSTREAM_TEST_FAKE_BRIDGE="+marker)
+		return cmd
 	}
 	t.Cleanup(func() { homeAgentCommand = old })
 	m = moveTo(t, m, "Run my agent for meetings")
