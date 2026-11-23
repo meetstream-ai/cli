@@ -20,7 +20,7 @@ func newCalendarCmd() *cobra.Command {
 	connect := &cobra.Command{
 		Use:   "connect",
 		Short: "Connect your calendar (one-click sign-in, or --own-app)",
-		Long: `Connect Google or Microsoft calendar with one click: sign in in your browser
+		Long: `Connect your Google calendar with one click: sign in in your browser
 and MIA auto-joins your meetings. --join-rule accepted (default) joins meetings
 you host or accepted; --join-rule all joins every meeting with a link.
 
@@ -65,7 +65,7 @@ Bring your own Google OAuth app instead with --own-app --client-id ... --client-
 			return result(cmd.Name(), v, err)
 		},
 	}
-	connect.Flags().StringVar(&hosted.Provider, "provider", "", "google or microsoft (asked when omitted)")
+	connect.Flags().StringVar(&hosted.Provider, "provider", "", "google (asked when omitted; microsoft is in preview)")
 	connect.Flags().StringVar(&hosted.JoinRule, "join-rule", "accepted", "accepted: meetings you host or accepted; all: every meeting with a link")
 	connect.Flags().BoolVar(&hosted.Open, "open", false, "open the browser even with --no-input")
 	connect.Flags().BoolVar(&own, "own-app", false, "use your own Google OAuth app (refresh-token flow)")

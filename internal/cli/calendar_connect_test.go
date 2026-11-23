@@ -142,3 +142,10 @@ func TestLoginSkipsCalendarPromptWhenNotInteractive(t *testing.T) {
 		}
 	}
 }
+
+// Microsoft is left out of menus until its sign-in app is live, but the flag still reaches it.
+func TestCalendarMenuOffersGoogleOnly(t *testing.T) {
+	if len(calendarProviders) != 1 || calendarProviders[0].id != "google" {
+		t.Fatalf("menu providers = %+v, want Google only", calendarProviders)
+	}
+}
