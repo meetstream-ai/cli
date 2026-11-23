@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release and upload archives
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test
+        run: go test -count=1 ./...
+
+      - name: goreleaser release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional. Without it the Homebrew cask is not pushed to the tap.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      # pack.py reads the binaries goreleaser left in dist/meetstream_<os>_<arch>*/.
+      - name: pack npm + PyPI
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 scripts/pack.py npm "$version"
+          python3 scripts/pack.py pypi "$version"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages
+          path: npm/out/*.tgz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-packages
+          path: pypi/out/*.whl
+          if-no-files-found: error
+
+  # Nothing below runs until the repo variable PUBLISH_PACKAGES is "true".
+  # Prerelease tags (v1.2.3-rc.1) are not published to npm or PyPI.
+  npm:
+    needs: goreleaser
+    if: ${{ vars.PUBLISH_PACKAGES == 'true' && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: npm-out
+
+      # Platform packages first, so the launcher's optionalDependencies resolve.
+      - name: npm publish
+        env:
+          # Needed until npm trusted publishing is set up for each package; with
+          # trusted publishing configured, npm uses the OIDC token instead.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          launcher="npm-out/meetstream-cli-${GITHUB_REF_NAME#v}.tgz"
+          test -f "$launcher"
+          for t in npm-out/*.tgz; do
+            [ "$t" = "$launcher" ] && continue
+            npm publish --provenance --access public "$t"
+          done
+          npm publish --provenance --access public "$launcher"
+
+  pypi:
+    needs: goreleaser
+    if: ${{ vars.PUBLISH_PACKAGES == 'true' && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-packages
+          path: pypi-out
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: pypi-out/

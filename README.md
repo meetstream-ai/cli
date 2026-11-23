@@ -61,7 +61,7 @@ printf %s "$MEETSTREAM_API_KEY" | meetstream auth set-key  # from stdin
 | Node | `npm install -g @meetstream/cli` or `npx @meetstream/cli` |
 | Python | `pipx install meetstream` or `uvx meetstream` |
 | Homebrew | `brew install meetstream-ai/tap/meetstream` |
-| Nothing | download a binary from [Releases](../../releases) |
+| Nothing | download a binary from [Releases](https://github.com/meetstream-ai/cli/releases) |
 
 Each package carries the binary for your platform: macOS, Linux or Windows, on
 amd64 or arm64. Nothing is downloaded at install time.
