@@ -248,7 +248,7 @@ func TestCacheRoundTripAndDefaultKey(t *testing.T) {
 	}
 	_ = os.Chmod(path, 0o644)
 	_ = Save("hermes", "provider:model", m)
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode after resave %v", info.Mode().Perm())
 	}
 	if again := Load("claude")[""]; again.MeasuredAt != loaded.MeasuredAt {

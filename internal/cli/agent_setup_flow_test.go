@@ -211,7 +211,7 @@ func TestEveryStepGoesBackWithoutCrashing(t *testing.T) {
 		t.Fatalf("created %+v", created)
 	}
 	for _, want := range []string{"1/11", "2/11", "7/11", "11/11", "2 models from test", "Model: m1", "isn't available on this server yet", "meetstream calendar connect",
-		"Created ~/MeetStream Agent", "Meeting context: meeting only", "edit with: meetstream agent context edit", "Access: Meeting only",
+		filepath.FromSlash("Created ~/MeetStream Agent"), "Meeting context: meeting only", "edit with: meetstream agent context edit", "Access: Meeting only",
 		"Woke Antigravity CLI", "First words", "Answered", "Antigravity CLI answered in 1.2 s: ready", "Warm mode (ACP) ready · meeting tools work (test tool called) (",
 		"warm session per meeting"} {
 		if !strings.Contains(out, want) {
