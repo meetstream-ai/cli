@@ -1,16 +1,25 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/spf13/cobra"
 
 	meetstream "github.com/meetstream-ai/cli"
+	"github.com/meetstream-ai/cli/internal/agentkit/agents"
+	"github.com/meetstream-ai/cli/internal/agentkit/checks"
+	kitconfig "github.com/meetstream-ai/cli/internal/agentkit/config"
+	agentlogin "github.com/meetstream-ai/cli/internal/agentkit/login"
+	"github.com/meetstream-ai/cli/internal/agentkit/meetingctx"
+	"github.com/meetstream-ai/cli/internal/agentkit/pairing"
+	"github.com/meetstream-ai/cli/internal/agentkit/relay"
+	"github.com/meetstream-ai/cli/internal/agentkit/warmcheck"
 	"github.com/meetstream-ai/cli/internal/api"
 	"github.com/meetstream-ai/cli/internal/config"
 	"github.com/meetstream-ai/cli/internal/ui"
@@ -30,56 +39,155 @@ func newVersionCmd(info BuildInfo) *cobra.Command {
 	}
 }
 
-type check struct {
+// doctorCheck is one doctor line in --json: ok and fix keep the earlier shape,
+// status adds "warn" (worth showing, not a problem).
+type doctorCheck struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
+	Status string `json:"status"`
 	Detail string `json:"detail"`
 	Fix    string `json:"fix,omitempty"`
 }
 
+// doctorWarm runs the warm check without a turn (no model tokens); tests swap it.
+var doctorWarm = func(ctx context.Context, c kitconfig.Config) warmcheck.Result {
+	return warmcheck.Check(ctx, c, warmcheck.Options{})
+}
+
+// doctorAgentChecks are the agent kit's checks (checks.Doctor) for the agent of
+// the saved setup, --agent, or the first one installed. With no agent CLI at
+// all it is one warning: your own agent is optional.
+func doctorAgentChecks(cmd *cobra.Command, agentName, binary string, noWarm bool) []checks.Check {
+	saved, _ := kitconfig.LoadSetup("")
+	if agentName == "" && saved != nil && saved.Command == "" {
+		agentName = saved.Agent
+	}
+	if agentName == "" {
+		for _, c := range detectAgents() {
+			if c.installed {
+				agentName = c.name
+				break
+			}
+		}
+	}
+	if agentName == "" {
+		return []checks.Check{{Name: "agent", Status: checks.Warn, Detail: "no agent CLI found (optional)", Hint: "To answer in meetings with your own agent, install one and run: meetstream setup"}}
+	}
+	in := checks.DoctorInput{Override: binary, Home: pairing.Home()}
+	if spec, ok := agents.All[agentName]; ok {
+		in.Spec = &spec
+	} else {
+		in.AgentErr = &checks.Check{Name: "agent", Status: checks.Fail, Detail: "unknown agent " + agentName, Hint: "choose: " + strings.Join(agentOrder, ", ")}
+	}
+	in.Workdir, _ = os.Getwd()
+	if saved != nil && saved.Workdir != "" && (in.Spec == nil || saved.Agent == in.Spec.Name) {
+		in.Workdir = saved.Workdir
+	}
+	in.Login = func(b string) (string, string) {
+		st := (&agentlogin.Checker{Agent: *in.Spec, Binary: b}).Check(true)
+		return st.State, st.Detail
+	}
+	if !noWarm {
+		in.Warm = func(b string) warmcheck.Result {
+			return doctorWarm(cmd.Context(), kitconfig.Config{Agent: *in.Spec, Binary: b, Workdir: in.Workdir, Owner: setupOwner()})
+		}
+	}
+	creds, _ := relay.NewStore().Load()
+	if creds != nil || (saved != nil && saved.Tunnel == "relay") {
+		in.Relay = func() (bool, string, string) {
+			if creds == nil {
+				return false, "", ""
+			}
+			return true, relay.DeviceName(), creds.RelayURL
+		}
+	}
+	ignore := saved != nil && saved.IgnoreRules == "yes"
+	useMeeting := saved == nil || saved.MeetingMD != "no"
+	in.Context = func(spec agents.Spec, workdir string) ([]meetingctx.Item, string, string) {
+		return meetingctx.Effective(spec, workdir, "", ignore, useMeeting), meetingctx.Mode(workdir, ignore), meetingctx.Workspace()
+	}
+	env := agentEnv()
+	return checks.Doctor(env, in)
+}
+
+// doctorKeyChecks are the instant checks: the API key and the server.
+func doctorKeyChecks() (all []checks.Check, keyMissing bool) {
+	key, src := config.ResolveKey()
+	switch src {
+	case "env":
+		all = append(all, checks.Check{Name: "API key", Status: checks.OK, Detail: "MEETSTREAM_API_KEY " + config.Mask(key)})
+	case "file":
+		all = append(all, checks.Check{Name: "API key", Status: checks.OK, Detail: ui.ShortPath(config.Path()) + " " + config.Mask(key)})
+	default:
+		keyMissing = true
+		all = append(all, checks.Check{Name: "API key", Status: checks.Fail, Detail: "not set", Hint: "meetstream login"})
+	}
+	all = append(all, checks.Check{Name: "API URL", Status: checks.OK, Detail: config.APIURL()})
+	return all, keyMissing
+}
+
+// renderDoctorLines is one line per check, with the fix under each problem.
+func renderDoctorLines(all []checks.Check) string {
+	var lines []string
+	for _, c := range all {
+		switch c.Status {
+		case checks.OK:
+			lines = append(lines, ui.OKLine(fmt.Sprintf("%-10s %s", c.Name, ui.DimStyle.Render(c.Detail))))
+		case checks.Warn:
+			lines = append(lines, ui.WarnLine(fmt.Sprintf("%-10s %s", c.Name, c.Detail)))
+		default:
+			lines = append(lines, ui.FailLine(fmt.Sprintf("%-10s %s", c.Name, c.Detail)))
+		}
+		if c.Status != checks.OK && c.Hint != "" {
+			lines = append(lines, ui.CommandLine(c.Hint))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderDoctor is the checks and the verdict, as `meetstream doctor` prints them.
+func renderDoctor(all []checks.Check, verdict string, failed int) string {
+	end := ui.OKLine(verdict)
+	if failed > 0 {
+		end = ui.FailLine(fmt.Sprintf("%d problem(s) to fix.", failed))
+	}
+	return renderDoctorLines(all) + "\n\n" + end
+}
+
 func newDoctorCmd(info BuildInfo) *cobra.Command {
-	return &cobra.Command{
-		Use: "doctor", Short: "Check your setup: API key, config file, tools", GroupID: "start", Args: cobra.NoArgs,
+	var agentName, binary string
+	var noWarm bool
+	cmd := &cobra.Command{
+		Use: "doctor", Short: "Check your setup: API key, config file, your agent CLI", GroupID: "start", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			var checks []check
-			key, src := config.ResolveKey()
-			switch src {
-			case "env":
-				checks = append(checks, check{"API key", true, "MEETSTREAM_API_KEY " + config.Mask(key), ""})
-			case "file":
-				checks = append(checks, check{"API key", true, ui.ShortPath(config.Path()) + " " + config.Mask(key), ""})
-			default:
-				checks = append(checks, check{"API key", false, "not set", "meetstream login"})
+			all, keyMissing := doctorKeyChecks()
+			all = append(all, doctorAgentChecks(cmd, agentName, binary, noWarm)...)
+			verdict, failed := checks.Verdict(all)
+			out := make([]doctorCheck, len(all))
+			for i, c := range all {
+				out[i] = doctorCheck{Name: c.Name, OK: c.Passed(), Status: string(c.Status), Detail: c.Detail, Fix: c.Hint}
 			}
-			checks = append(checks, check{"API URL", true, config.APIURL(), ""})
-			for _, tool := range []string{"claude", "codex", "gemini"} {
-				if p, err := exec.LookPath(tool); err == nil {
-					checks = append(checks, check{"Agent CLI " + tool, true, ui.ShortPath(p), ""})
-				}
-			}
-			ok := true
-			for _, c := range checks {
-				ok = ok && c.OK
-			}
-			err := emit(map[string]any{"ok": ok, "version": info.Version, "checks": checks}, func() {
+			err := emit(map[string]any{"ok": failed == 0, "version": info.Version, "verdict": verdict, "checks": out}, func() {
 				ui.Header(info.Version, "Checking your setup")
 				fmt.Fprintln(ui.Out)
-				for _, c := range checks {
-					if c.OK {
-						ui.OK(fmt.Sprintf("%-16s %s", c.Name, ui.DimStyle.Render(c.Detail)))
-					} else {
-						ui.Fail(fmt.Sprintf("%-16s %s", c.Name, c.Detail))
-						ui.Command(c.Fix)
-					}
-				}
-				fmt.Fprintln(ui.Out)
+				fmt.Fprintln(ui.Out, renderDoctor(all, verdict, failed))
 			})
-			if err == nil && !ok {
+			switch {
+			case err != nil:
+				return err
+			case keyMissing:
 				return &ExitError{Code: 2, Message: "setup is not complete", Hint: "run: meetstream login"}
+			case failed > 0:
+				return &ExitError{Code: 1, Message: fmt.Sprintf("%d problem(s) to fix", failed), Hint: "follow the fix under each ✗ line"}
 			}
-			return err
+			return nil
 		},
 	}
+	f := cmd.Flags()
+	f.StringVar(&agentName, "agent", "", "agent CLI to check (default: your setup, or the first installed)")
+	f.StringVar(&binary, "binary", "", "path to the agent CLI")
+	f.BoolVar(&noWarm, "no-warm", false, "skip starting the agent's warm (ACP) session")
+	return cmd
 }
 
 func renderMarkdown(md string) string {

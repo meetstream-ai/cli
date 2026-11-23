@@ -4,6 +4,7 @@
   "description": "MeetStream CLI: meeting bots, transcripts and your own agent in the call. Installs the native meetstream binary for your platform.",
   "license": "Apache-2.0",
   "homepage": "https://docs.meetstream.ai",
+  "repository": { "type": "git", "url": "git+https://github.com/meetstream-ai/cli.git" },
   "bin": { "meetstream": "bin/meetstream.js" },
   "files": ["bin", "README.md"],
   "engines": { "node": ">=18" },

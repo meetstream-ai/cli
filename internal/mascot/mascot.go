@@ -1,6 +1,6 @@
 // Package mascot draws MIA, MeetStream's mascot, in the terminal.
 //
-// The frames come from the agent kit (MS-2268, `mia-state-gifs/mascot-v1`),
+// The frames come from the agent kit (`mia-state-gifs/mascot-v1`),
 // pre-rendered to small RGBA frames per state: idle (a wave), thinking,
 // speaking and problem. Each terminal cell is drawn with a half block, so it
 // holds two pixels. Colour is true colour when the terminal has it, and the

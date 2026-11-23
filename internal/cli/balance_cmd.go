@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+	"fmt"
+
 	"github.com/meetstream-ai/cli/internal/api"
 	"github.com/meetstream-ai/cli/internal/ui"
 	"github.com/spf13/cobra"
@@ -23,23 +25,11 @@ func newBalanceCmd() *cobra.Command {
 				}
 				return &ExitError{Code: 3, Message: message, Hint: "https://app.meetstream.ai/billing", Silent: true}
 			}
-			return &ExitError{Code: 3, Message: message, Hint: "https://app.meetstream.ai/billing"}
+			return &ExitError{Code: 3, Message: "Balance isn't available for this account yet.", Hint: "https://app.meetstream.ai/billing"}
 		}
 		if err != nil {
 			return apiError(err)
 		}
-		return emit(v, func() {
-			m := object(v)
-			balance := "no prepaid balance (billed by invoice)"
-			if m["balance_usd"] != nil {
-				currency := text(m["currency"])
-				if currency == "" {
-					currency = "USD"
-				}
-				balance = text(m["balance_usd"]) + " " + currency
-			}
-			ui.Box("Balance", [][2]string{{"customer_type", text(m["customer_type"])}, {"balance", balance}})
-			ui.Note("Top up: https://app.meetstream.ai/billing")
-		})
+		return emit(v, func() { fmt.Fprintln(ui.Out, renderBalance(v)) })
 	}}
 }

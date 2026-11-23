@@ -1,12 +1,9 @@
-# goreleaser v2: one binary for six targets, plus a Homebrew formula.
-# Snapshot builds run locally; real releases run from a tag.
+# goreleaser v2: one binary for six targets, plus a Homebrew cask.
+# Snapshot builds run locally and in CI; real releases run from a tag.
+# Tests run in CI before this, so there are no before-hooks here
+# (`go mod tidy` in a hook would dirty the tree mid-release).
 version: 2
 project_name: meetstream
-
-before:
-  hooks:
-    - go mod tidy
-    - go test ./...
 
 builds:
   - id: meetstream
@@ -18,6 +15,7 @@ builds:
     flags: [-trimpath]
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
   - id: default
@@ -37,16 +35,17 @@ snapshot:
 changelog:
   disable: true
 
-brews:
+# Pushes to meetstream-ai/homebrew-tap only when HOMEBREW_TAP_TOKEN is set
+# (GITHUB_TOKEN cannot write to another repo); otherwise the cask is built
+# into dist/ and not uploaded. Prereleases are never uploaded.
+homebrew_casks:
   - name: meetstream
+    binaries: [meetstream]
     repository:
       owner: meetstream-ai
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+      token: '{{ index .Env "HOMEBREW_TAP_TOKEN" }}'
+    directory: Casks
     homepage: https://meetstream.ai
     description: "MeetStream CLI: meeting bots, transcripts and your own agent in the call"
-    license: Apache-2.0
-    skip_upload: auto
-    test: |
-      system "#{bin}/meetstream", "version", "--json"
+    skip_upload: '{{ if index .Env "HOMEBREW_TAP_TOKEN" }}auto{{ else }}true{{ end }}'

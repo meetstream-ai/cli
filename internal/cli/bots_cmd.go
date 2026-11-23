@@ -3,12 +3,10 @@ package cli
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -57,28 +55,20 @@ func first(m map[string]any, keys ...string) string {
 	}
 	return ""
 }
-func humanData(title string, v any) {
-	if m, ok := v.(map[string]any); ok {
-		keys := make([]string, 0, len(m))
-		for k := range m {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		rows := [][2]string{}
-		for _, k := range keys {
-			b, _ := json.Marshal(m[k])
-			s := string(b)
-			if str, ok := m[k].(string); ok {
-				s = str
-			}
-			rows = append(rows, [2]string{k, s})
-		}
-		ui.Box(title, rows)
-		return
+
+// humanData prints any API answer as plain rows and tables (never JSON).
+func humanData(title string, v any) { fmt.Fprintln(ui.Out, renderData(title, v, ui.Width())) }
+
+// viewFor is the human view of one command's answer, by command path.
+type viewFunc func(v any) string
+
+func resultView(v any, err error, view viewFunc) error {
+	if err != nil {
+		return apiError(err)
 	}
-	b, _ := json.MarshalIndent(v, "", "  ")
-	fmt.Fprintln(ui.Out, string(b))
+	return emit(v, func() { fmt.Fprintln(ui.Out, view(v)) })
 }
+
 func result(title string, v any, err error) error {
 	if err != nil {
 		return apiError(err)
@@ -198,11 +188,7 @@ func createCmd(name string) *cobra.Command {
 			fmt.Fprintln(os.Stderr, "⚠ "+w)
 		}
 		status, v, err := c.CreateBot(cmd.Context(), payload, idem)
-		title := "Bot created"
-		if status == 507 {
-			title = "Idempotent replay - existing bot returned (no new bot created)"
-		}
-		return result(title, v, err)
+		return resultView(v, err, func(v any) string { return renderJoinResult(v, o.Name, o.MeetingLink, status == 507) })
 	}
 	// Commander accepts multiple key=value entries after these flags.
 	runCreate := cmd.RunE
@@ -265,7 +251,7 @@ func botAction(use string, n int, action func(*cobra.Command, *api.Client, []str
 			return err
 		}
 		v, err := action(cmd, c, args)
-		return result(cmd.Name(), v, err)
+		return resultView(v, err, func(v any) string { return humanView(cmd, args, v) })
 	}}
 }
 
@@ -279,30 +265,7 @@ func botsCmd(legacy bool) *cobra.Command {
 		name = "bot"
 	}
 	cmd := &cobra.Command{Use: name, Short: "Manage meeting bots", GroupID: "meet", Hidden: legacy}
-	list := botAction("list", 0, func(cmd *cobra.Command, c *api.Client, _ []string) (any, error) { return c.ListBots(cmd.Context()) })
-	list.RunE = func(cmd *cobra.Command, _ []string) error {
-		c, err := apiClient(cmd)
-		if err != nil {
-			return err
-		}
-		v, err := c.ListBots(cmd.Context())
-		if err != nil {
-			return apiError(err)
-		}
-		return emit(v, func() {
-			items, _ := object(v)["bots"].([]any)
-			if len(items) == 0 {
-				ui.Note("No bots yet. Create one: meetstream join <meeting-url>")
-			}
-			for _, it := range items {
-				m := object(it)
-				fmt.Fprintf(ui.Out, "%-36s %-12s %s %s\n", first(m, "BotID", "bot_id", "id"), first(m, "Status", "status"), first(m, "BotUsername", "bot_name"), first(m, "Platform"))
-			}
-			if object(v)["hasNextPage"] == true {
-				ui.Note("… more pages (nextCursor: " + text(object(v)["nextCursor"]) + ")")
-			}
-		})
-	}
+	list := newBotsListCmd()
 	cmd.AddCommand(list)
 	cmd.AddCommand(&cobra.Command{Use: "tail [id]", Short: "Planned: live bot events over the relay", Args: cobra.MaximumNArgs(1), RunE: func(*cobra.Command, []string) error {
 		return usageErr("bots tail is planned", "use meetstream listen with a tunnel until the relay carries events")
@@ -318,7 +281,7 @@ func botsCmd(legacy bool) *cobra.Command {
 			if err != nil {
 				return apiError(err)
 			}
-			if err := emit(v, func() { fmt.Fprintf(ui.Out, "%s  %s\n", time.Now().Format("15:04:05"), text(object(v)["status"])) }); err != nil {
+			if err := emit(v, func() { fmt.Fprintln(ui.Out, renderBotStatus(v, time.Now().Format("15:04:05"))) }); err != nil {
 				return err
 			}
 			if !watch || terminalStatus.MatchString(text(object(v)["status"])) {

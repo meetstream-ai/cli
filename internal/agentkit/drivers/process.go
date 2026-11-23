@@ -109,9 +109,15 @@ func (p *process) close() {
 		signal(p.cmd, false)
 		_ = p.in.Close()
 		go func() {
+			exited := false
 			select {
 			case <-p.done:
+				exited = true
 			case <-time.After(2 * time.Second):
+			}
+			// Also after the agent exited, where its process group outlives it:
+			// helpers it started may still run there.
+			if !exited || killGroupAfterExit {
 				signal(p.cmd, true)
 			}
 		}()

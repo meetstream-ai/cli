@@ -267,12 +267,12 @@ func TestM3Hints(t *testing.T) {
 	}
 }
 func TestM3HomeAndAlias(t *testing.T) {
-	for _, item := range homeItems {
-		if item.args[0] == "join" || item.args[0] == "bots" {
-			if item.soon != "" {
-				t.Errorf("%s still marked soon", item.args[0])
-			}
-		}
+	kinds := map[homeKind]bool{}
+	for _, item := range homeMenu() {
+		kinds[item.kind] = true
+	}
+	if !kinds[kindSend] || !kinds[kindBots] {
+		t.Error("home is missing Send a bot or My recent bots")
 	}
 	root := NewRoot(BuildInfo{})
 	bot, _, err := root.Find([]string{"bot"})

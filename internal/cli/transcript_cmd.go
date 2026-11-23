@@ -87,7 +87,7 @@ func newTranscriptCmd() *cobra.Command {
 		if raw && !g.JSON {
 			return json.NewEncoder(os.Stdout).Encode(res.Transcript)
 		}
-		return emit(res.Transcript, func() { fmt.Fprintln(ui.Out, transcriptText(res.Transcript)) })
+		return emit(res.Transcript, func() { fmt.Fprintln(ui.Out, renderTranscript(res.Transcript, ui.Width())) })
 	}}
 	cmd.Flags().BoolVarP(&wait, "wait", "w", false, "poll until ready")
 	cmd.Flags().BoolVar(&raw, "raw", false, "raw provider output")
