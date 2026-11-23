@@ -93,7 +93,7 @@ and set `MEETSTREAM_API_KEY`.
 | `bots tail` | Planned: live bot events over the relay; exits 2 with a local receiver hint | planned |
 | `listen` | Local webhook receiver; loopback by default, `--forward` to relay elsewhere | ✅ |
 | `logins teams/google` | Manages domains and signed-in accounts; passwords from stdin, environment or hidden prompt | ✅ |
-| `calendar connect` | One-click Google or Microsoft calendar sign-in in your browser; turns on auto-join (`--join-rule accepted` (default): meetings you host or accepted; `all`: every meeting with a link). `--own-app` keeps the bring-your-own OAuth app flow | ✅ |
+| `calendar connect` | One-click Google calendar sign-in in your browser (Microsoft coming); turns on auto-join (`--join-rule accepted` (default): meetings you host or accepted; `all`: every meeting with a link). `--own-app` keeps the bring-your-own OAuth app flow | ✅ |
 | `calendar list/events/schedule/unschedule/auto-join/reschedule/cancel` | Manages calendar bots (`auto-join off` turns auto-join off) | ✅ |
 | `mia apply -f config.json` | Creates or updates an agent; `--dry-run` prints the body offline | ✅ |
 | `mcp add claude/codex/cursor/vscode` | Prints hosted OAuth MCP setup; `--write` merges Codex/Cursor/VS Code configs with a backup | ✅ |

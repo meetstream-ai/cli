@@ -47,7 +47,10 @@ var (
 	calendarPick         = pickOption
 )
 
-var calendarProviders = []struct{ id, label string }{{"google", "Google"}, {"microsoft", "Microsoft"}}
+// calendarProviders are the menu choices. Microsoft stays reachable with
+// --provider microsoft but is left out of menus until its sign-in app is live,
+// so nobody picks an option that always answers "not available".
+var calendarProviders = []struct{ id, label string }{{"google", "Google"}}
 
 var joinRuleText = map[string]string{
 	"accepted": "MIA joins meetings you host or accepted",
@@ -81,7 +84,7 @@ func runCalendarConnect(cmd *cobra.Command, opts calendarConnectOptions) (*calen
 		return nil, usageErr("--provider must be google or microsoft", "")
 	}
 	if opts.Provider == "" && !calendarCanPrompt() {
-		return nil, usageErr("--provider is required here", "pass --provider google or --provider microsoft")
+		return nil, usageErr("--provider is required here", "pass --provider google")
 	}
 	c, err := apiClient(cmd)
 	if err != nil {
