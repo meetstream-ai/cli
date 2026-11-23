@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"net/url"
+	"strings"
 
 	"github.com/meetstream-ai/cli/internal/api"
 	"github.com/spf13/cobra"
@@ -11,17 +13,62 @@ func newCalendarCmd() *cobra.Command {
 	cal := &cobra.Command{Use: "calendar", Short: "Google Calendar auto-join", GroupID: "meet"}
 	var clientID, secret, token string
 	var own bool
-	connect := botAction("connect", 0, func(cmd *cobra.Command, c *api.Client, _ []string) (any, error) {
-		// TODO(MS-2369): add one-click connect when the API supports it.
-		body := map[string]any{"google_client_id": clientID, "google_client_secret": secret, "google_refresh_token": token}
-		v, err := requestJSON(cmd, c, "POST", "/calendar/create_calendar", body)
-		return safeCredentialResult(v, err, body)
-	})
-	connect.Short = "Connect using your own OAuth app and refresh token"
+	var hosted calendarConnectOptions
+	legacyFlags := []string{"client-id", "client-secret", "refresh-token"}
+	connect := &cobra.Command{
+		Use:   "connect",
+		Short: "Connect your calendar (one-click sign-in, or --own-app)",
+		Long: `Connect your Google calendar with one click: sign in in your browser
+and MIA auto-joins your meetings. --join-rule accepted (default) joins meetings
+you host or accepted; --join-rule all joins every meeting with a link.
+
+Bring your own Google OAuth app instead with --own-app --client-id ... --client-secret ... --refresh-token ...`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			legacy := own
+			for _, f := range legacyFlags {
+				legacy = legacy || cmd.Flags().Changed(f)
+			}
+			if !legacy {
+				res, err := runCalendarConnect(cmd, hosted)
+				if errors.Is(err, errCalendarSkipped) {
+					return &ExitError{Code: 130, Message: "calendar connect cancelled"}
+				}
+				if err != nil {
+					return err
+				}
+				return emit(res, func() {})
+			}
+			for _, f := range []string{"provider", "join-rule", "open"} {
+				if cmd.Flags().Changed(f) {
+					return usageErr("--"+f+" is for one-click connect, not --own-app", "drop --own-app and the client flags, or drop --"+f)
+				}
+			}
+			var missing []string
+			for _, f := range legacyFlags {
+				if !cmd.Flags().Changed(f) {
+					missing = append(missing, `"`+f+`"`)
+				}
+			}
+			if len(missing) > 0 {
+				return usageErr("required flag(s) "+strings.Join(missing, ", ")+" not set", "")
+			}
+			c, err := apiClient(cmd)
+			if err != nil {
+				return err
+			}
+			body := map[string]any{"google_client_id": clientID, "google_client_secret": secret, "google_refresh_token": token}
+			v, err := requestJSON(cmd, c, "POST", "/calendar/create_calendar", body)
+			v, err = safeCredentialResult(v, err, body)
+			return result(cmd.Name(), v, err)
+		},
+	}
+	connect.Flags().StringVar(&hosted.Provider, "provider", "", "google (asked when omitted; microsoft is in preview)")
+	connect.Flags().StringVar(&hosted.JoinRule, "join-rule", "accepted", "accepted: meetings you host or accepted; all: every meeting with a link")
+	connect.Flags().BoolVar(&hosted.Open, "open", false, "open the browser even with --no-input")
 	connect.Flags().BoolVar(&own, "own-app", false, "use your own Google OAuth app (refresh-token flow)")
 	for flag, ptr := range map[string]*string{"client-id": &clientID, "client-secret": &secret, "refresh-token": &token} {
-		connect.Flags().StringVar(ptr, flag, "", flag)
-		_ = connect.MarkFlagRequired(flag)
+		connect.Flags().StringVar(ptr, flag, "", flag+" (with --own-app)")
 	}
 	cal.AddCommand(connect)
 	for _, action := range []string{"list", "events", "schedule", "unschedule", "reschedule", "cancel"} {

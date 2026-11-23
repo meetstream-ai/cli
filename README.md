@@ -87,13 +87,14 @@ and set `MEETSTREAM_API_KEY`.
 | `docs` | Shows this README in your terminal | ✅ |
 | `skill` | Prints [SKILL.md](SKILL.md) for coding agents | ✅ |
 | `version` | Shows version, commit and platform | ✅ |
-| `login` | Signs in with your browser and stores a named API key, which is never shown (`--with-key` reads one from stdin for CI) | ✅ |
+| `login` | Signs in with your browser and stores a named API key, which is never shown (`--with-key` reads one from stdin for CI); in a terminal, then offers to connect your calendar (`--no-calendar` skips) | ✅ |
 | `join <url>` | Sends a bot to a meeting (all `create_bot` options) | ✅ |
 | `bots list/status/get/timeline/remove/delete/say/show-image/hand` | Manages your bots (old `bot …` names still work) | ✅ |
 | `bots tail` | Planned: live bot events over the relay; exits 2 with a local receiver hint | planned |
 | `listen` | Local webhook receiver; loopback by default, `--forward` to relay elsewhere | ✅ |
 | `logins teams/google` | Manages domains and signed-in accounts; passwords from stdin, environment or hidden prompt | ✅ |
-| `calendar connect/list/events/schedule/unschedule/auto-join/reschedule/cancel` | Connects your OAuth app and manages calendar bots | ✅ |
+| `calendar connect` | One-click Google calendar sign-in in your browser (Microsoft coming); turns on auto-join (`--join-rule accepted` (default): meetings you host or accepted; `all`: every meeting with a link). `--own-app` keeps the bring-your-own OAuth app flow | ✅ |
+| `calendar list/events/schedule/unschedule/auto-join/reschedule/cancel` | Manages calendar bots (`auto-join off` turns auto-join off) | ✅ |
 | `mia apply -f config.json` | Creates or updates an agent; `--dry-run` prints the body offline | ✅ |
 | `mcp add claude/codex/cursor/vscode` | Prints hosted OAuth MCP setup; `--write` merges Codex/Cursor/VS Code configs with a backup | ✅ |
 | `transcript <bot-id>` | Prints the transcript | ✅ |
