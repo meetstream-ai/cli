@@ -13,9 +13,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/meetstream-ai/cli/internal/telemetry"
 	"github.com/meetstream-ai/cli/internal/ui"
 )
 
@@ -68,6 +70,12 @@ Docs: https://docs.meetstream.ai   Keys: https://app.meetstream.ai/api-keys`,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			ui.Setup(g.NoColor, g.JSON)
 			ui.Out = os.Stderr
+			// Anonymous: the command name and version only (MEETSTREAM_TELEMETRY=0 turns it off).
+			path := strings.TrimSpace(strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()))
+			if path == "" {
+				path = "home"
+			}
+			telemetryWait = telemetry.Track("cli_command_run", map[string]any{"command": cmd.Name(), "command_path": path, "version": info.Version}, 800*time.Millisecond)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if g.JSON || g.NoInput || !ui.Interactive() {
@@ -101,10 +109,14 @@ Docs: https://docs.meetstream.ai   Keys: https://app.meetstream.ai/api-keys`,
 	return root
 }
 
+// telemetryWait waits (briefly) for the usage event sent at command start.
+var telemetryWait = func() {}
+
 // Execute runs the CLI and returns the process exit code.
 func Execute(info BuildInfo) int {
 	root := NewRoot(info)
 	err := root.Execute()
+	telemetryWait()
 	if err == nil {
 		return 0
 	}

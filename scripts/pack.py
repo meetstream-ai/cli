@@ -7,7 +7,8 @@
 npm uses the esbuild pattern: one @meetstream/cli-<os>-<arch> package per platform,
 and the @meetstream/cli launcher lists them all as optionalDependencies.
 PyPI uses the ruff pattern: platform wheels that put the binary in scripts/, so
-`pipx install meetstream` and `uvx meetstream` work without Go.
+`pipx install meetstream-cli` and `uvx --from meetstream-cli meetstream` work without Go.
+(The PyPI name `meetstream` belongs to another project; the command is still `meetstream`.)
 """
 
 from __future__ import annotations
@@ -87,11 +88,11 @@ def pack_pypi(version: str) -> None:
     readme = (ROOT / "README.md").read_text()
     for (goos, goarch), (_, tag) in TARGETS.items():
         src = binary(goos, goarch)
-        dist_info = f"meetstream-{pyver}.dist-info"
+        dist_info = f"meetstream_cli-{pyver}.dist-info"
         files = {
-            f"meetstream-{pyver}.data/scripts/{src.name}": src.read_bytes(),
+            f"meetstream_cli-{pyver}.data/scripts/{src.name}": src.read_bytes(),
             f"{dist_info}/METADATA": (
-                "Metadata-Version: 2.1\nName: meetstream\n"
+                "Metadata-Version: 2.1\nName: meetstream-cli\n"
                 f"Version: {pyver}\n"
                 "Summary: MeetStream CLI: meeting bots, transcripts and your own agent in the call\n"
                 "License: Apache-2.0\nHome-page: https://docs.meetstream.ai\n"
@@ -104,7 +105,7 @@ def pack_pypi(version: str) -> None:
         }
         record = [_record_line(n, d) for n, d in files.items()] + [f"{dist_info}/RECORD,,"]
         files[f"{dist_info}/RECORD"] = ("\n".join(record) + "\n").encode()
-        whl = out / f"meetstream-{pyver}-py3-none-{tag}.whl"
+        whl = out / f"meetstream_cli-{pyver}-py3-none-{tag}.whl"
         with zipfile.ZipFile(whl, "w", zipfile.ZIP_DEFLATED) as z:
             for name, data in files.items():
                 info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))

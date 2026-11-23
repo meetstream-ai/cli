@@ -38,13 +38,18 @@ whichever package manager you already use. Every package ships the same Go binar
 
 ## Install
 
-**From source on your Mac (works today):**
+Install from whichever package manager you already use:
 
-```bash
-git clone https://github.com/meetstream-ai/cli.git meetstream-cli && cd meetstream-cli
-make install            # builds and installs ~/.local/bin/meetstream
-make smoke              # version, doctor, and the key in use
-```
+| You have | Run |
+|---|---|
+| Node | `npm install -g @meetstream/cli` or `npx @meetstream/cli` |
+| Python | `pipx install meetstream-cli` or `uvx --from meetstream-cli meetstream` |
+| Homebrew | `brew install meetstream-ai/tap/meetstream` |
+| Nothing | download a binary from [Releases](https://github.com/meetstream-ai/cli/releases) |
+
+Each package carries the binary for your platform: macOS, Linux or Windows, on
+amd64 or arm64. Nothing is downloaded at install time. On PyPI the package is
+`meetstream-cli`; the command is still `meetstream`.
 
 **Sign in.** `meetstream login` opens your browser. If browser sign-in isn't available, `login`
 says so and takes a pasted key instead. You can also set the key directly:
@@ -54,17 +59,13 @@ meetstream auth set-key                                # hidden prompt
 printf %s "$MEETSTREAM_API_KEY" | meetstream auth set-key  # from stdin
 ```
 
-**From a package manager (after the first release):**
+**From source:**
 
-| You have | Run |
-|---|---|
-| Node | `npm install -g @meetstream/cli` or `npx @meetstream/cli` |
-| Python | `pipx install meetstream` or `uvx meetstream` |
-| Homebrew | `brew install meetstream-ai/tap/meetstream` |
-| Nothing | download a binary from [Releases](https://github.com/meetstream-ai/cli/releases) |
-
-Each package carries the binary for your platform: macOS, Linux or Windows, on
-amd64 or arm64. Nothing is downloaded at install time.
+```bash
+git clone https://github.com/meetstream-ai/cli.git meetstream-cli && cd meetstream-cli
+make install            # builds and installs ~/.local/bin/meetstream
+make smoke              # version, doctor, and the key in use
+```
 
 ## Quick start
 
@@ -134,6 +135,7 @@ Coding agents can read [SKILL.md](SKILL.md), or run `meetstream skill`.
 | `MEETSTREAM_API_URL` | API base URL (default `https://api.meetstream.ai/api/v1`). |
 | `MEETSTREAM_AUTH_URL` | Sign-in server (default `https://mcp.meetstream.ai`). |
 | `MEETSTREAM_MASCOT=off` | Hides MIA. |
+| `MEETSTREAM_TELEMETRY=0` (or `DO_NOT_TRACK=1`) | Turns off the anonymous usage event (see Telemetry). |
 
 The CLI never prints or logs your key. Status output shows only the last four characters.
 
@@ -142,6 +144,17 @@ The CLI never prints or logs your key. Status output shows only the last four ch
 Everything in the command table marked ✅ works today. Planned next: `bots tail` over the relay
 and `agent pair/list/revoke` for tunnel mode.
 `meetstream` replaces `@meetstream/cli` and `meetstream-agent-kit`; both keep working during the switch.
+
+## Telemetry
+
+The CLI sends one **anonymous** usage event per command: the command name, the CLI version,
+your OS and CPU type, and a hashed computer id. It never sends your API key, meeting URLs,
+transcripts, flags or any other content. It is the same event `@meetstream/cli` 0.x sent.
+Turn it off any time:
+
+```bash
+export MEETSTREAM_TELEMETRY=0   # or the standard DO_NOT_TRACK=1
+```
 
 ## Development
 

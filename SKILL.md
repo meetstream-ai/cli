@@ -5,7 +5,7 @@ description: Use the meetstream CLI to send meeting bots to Zoom, Google Meet an
 
 # meetstream CLI
 
-One binary. Install: `npx @meetstream/cli`, `uvx meetstream` or `brew install meetstream-ai/tap/meetstream`.
+One binary. Install: `npx @meetstream/cli`, `uvx --from meetstream-cli meetstream` or `brew install meetstream-ai/tap/meetstream`.
 
 ## Rules for agents
 
