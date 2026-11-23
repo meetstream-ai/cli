@@ -27,6 +27,8 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
 	"github.com/meetstream-ai/cli/internal/agentkit/checks"
 	kitconfig "github.com/meetstream-ai/cli/internal/agentkit/config"
+	"github.com/meetstream-ai/cli/internal/agentkit/proctree"
+	"github.com/meetstream-ai/cli/internal/agentkit/redact"
 	"github.com/meetstream-ai/cli/internal/api"
 	"github.com/meetstream-ai/cli/internal/config"
 	"github.com/meetstream-ai/cli/internal/mascot"
@@ -107,73 +109,138 @@ func homeMenu() []homeItem {
 // ── background agent ─────────────────────────────────────────────────────────
 
 // homeAgentCommand runs your agent for meetings: `meetstream agent serve`
-// with the saved setup (the same bridge and relay; no new port). Tests swap it.
+// with the saved setup (the same bridge and relay; no new port). Its lines are
+// kept in the app, so they name who spoke, never what was said. Tests swap it.
 var homeAgentCommand = func() *exec.Cmd {
 	self, err := os.Executable()
 	if err != nil {
 		self = "meetstream"
 	}
-	return exec.Command(self, "agent", "serve")
+	return exec.Command(self, "agent", "serve", "--hide-turn-text")
 }
+
+// Stopping the background agent: ask, then force after agentStopGrace; quitting
+// the app waits up to agentQuitWait for it to be gone.
+var (
+	agentStopGrace = 3 * time.Second
+	agentQuitWait  = 5 * time.Second
+)
+
+// agentLogLines is how many activity lines the app keeps.
+const agentLogLines = 200
 
 type bgAgent struct {
-	cmd     *exec.Cmd
-	lines   chan string
-	done    chan error
-	mu      sync.Mutex
-	log     []string
-	started time.Time
+	cmd      *exec.Cmd
+	changed  chan struct{} // a new line (holds at most one wake-up)
+	exited   chan struct{} // closed once the process is gone
+	done     chan error    // its exit, once
+	err      error
+	stopOnce sync.Once
+	mu       sync.Mutex
+	log      []string
+	started  time.Time
 }
 
-type agentLineMsg struct{ line string }
+type agentLineMsg struct{}
 type agentExitMsg struct{ err error }
 
+// startAgent starts the background agent. Its output is read all the time into
+// a bounded buffer, so a slow or suspended app (a flow running in the
+// terminal) never blocks the bridge's writes.
 func startAgent() (*bgAgent, error) {
 	c := homeAgentCommand()
 	pr, pw := io.Pipe()
 	c.Stdout, c.Stderr, c.Stdin = pw, pw, nil
+	proctree.PrepareInterrupt(c)
 	if err := c.Start(); err != nil {
 		return nil, err
 	}
-	a := &bgAgent{cmd: c, lines: make(chan string, 64), done: make(chan error, 1), started: time.Now()}
+	a := &bgAgent{cmd: c, changed: make(chan struct{}, 1), exited: make(chan struct{}), done: make(chan error, 1), started: time.Now()}
 	go func() {
 		sc := bufio.NewScanner(pr)
+		sc.Buffer(make([]byte, 4096), 1024*1024)
 		for sc.Scan() {
-			a.lines <- sc.Text()
+			a.add(sc.Text())
 		}
-		close(a.lines)
+		_, _ = io.Copy(io.Discard, pr) // a line over the limit: keep draining
 	}()
-	go func() { err := c.Wait(); pw.Close(); a.done <- err }()
+	go func() {
+		err := c.Wait()
+		pw.Close()
+		a.err = err
+		close(a.exited)
+		a.done <- err
+	}()
 	return a, nil
 }
 
 // next waits for the agent's next log line, or its exit.
 func (a *bgAgent) next() tea.Cmd {
 	return func() tea.Msg {
-		if line, ok := <-a.lines; ok {
-			return agentLineMsg{line}
+		select {
+		case <-a.changed:
+			return agentLineMsg{}
+		case <-a.exited:
+			return agentExitMsg{a.err}
 		}
-		return agentExitMsg{<-a.done}
 	}
 }
 
+// stop asks the agent to stop (Ctrl-C to its bridge) and kills its tree if it
+// is still running after agentStopGrace. Calling it again does nothing more.
 func (a *bgAgent) stop() {
 	if a == nil || a.cmd.Process == nil {
 		return
 	}
-	_ = a.cmd.Process.Signal(os.Interrupt)
-	go func(p *os.Process) {
-		time.Sleep(3 * time.Second)
-		_ = p.Kill()
-	}(a.cmd.Process)
+	a.stopOnce.Do(func() {
+		if err := proctree.Interrupt(a.cmd); err != nil {
+			_ = proctree.Kill(a.cmd)
+		}
+		grace := agentStopGrace
+		go func() {
+			select {
+			case <-a.exited:
+			case <-time.After(grace):
+				_ = proctree.Kill(a.cmd)
+			}
+		}()
+	})
 }
 
+// shutdown stops the agent and waits until it is gone, at most wait (then it
+// is killed); false if it still did not exit.
+func (a *bgAgent) shutdown(wait time.Duration) bool {
+	if a == nil || a.cmd.Process == nil {
+		return true
+	}
+	a.stop()
+	select {
+	case <-a.exited:
+		return true
+	case <-time.After(wait):
+	}
+	_ = proctree.Kill(a.cmd)
+	select {
+	case <-a.exited:
+		return true
+	case <-time.After(time.Second):
+		return false
+	}
+}
+
+// add keeps line (secrets hidden) in the ring of the last agentLogLines and
+// wakes the app; it never waits.
 func (a *bgAgent) add(line string) {
+	line = redact.Secrets(line)
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.log = append(a.log, line)
-	if len(a.log) > 200 {
-		a.log = a.log[len(a.log)-200:]
+	if len(a.log) > agentLogLines {
+		a.log = a.log[len(a.log)-agentLogLines:]
+	}
+	a.mu.Unlock()
+	select {
+	case a.changed <- struct{}{}:
+	default:
 	}
 }
 
@@ -370,7 +437,6 @@ func (m homeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.agent == nil {
 			return m, nil
 		}
-		m.agent.add(msg.line)
 		if m.isAgentPane() {
 			m.pane = m.agentPane()
 		}
@@ -808,8 +874,15 @@ func (m homeModel) toggleAgent(on bool) (tea.Model, tea.Cmd) {
 	if m.agent != nil {
 		return m, nil
 	}
-	if _, err := kitconfig.LoadSetup(""); err != nil {
+	s, err := kitconfig.LoadSetup("")
+	switch {
+	case err != nil:
 		m.agentErr = "Set up your agent first: Bring an AI agent into my meetings"
+	case s.MaxAccess == "confirm":
+		// Its approvals are asked on the terminal, which the app holds.
+		m.agentErr = "Ask-first access needs the foreground: run meetstream agent serve"
+	}
+	if m.agentErr != "" {
 		if m.isAgentPane() {
 			m.pane = m.agentPane()
 		}
@@ -894,15 +967,17 @@ func (m homeModel) agentPane() string {
 		b.WriteString("\n" + ui.FailLine(m.agentErr) + "\n")
 	}
 	b.WriteString("\n" + ui.Section("Activity") + "\n")
-	if m.agent == nil || len(m.agent.log) == 0 {
-		b.WriteString(ui.DimStyle.Render("Nothing yet.") + "\n")
-	} else {
+	var lines []string
+	if m.agent != nil {
 		m.agent.mu.Lock()
-		lines := m.agent.log[max(0, len(m.agent.log)-12):]
-		for _, l := range lines {
-			b.WriteString(ui.Truncate(l, max(20, m.paneWidth()-2)) + "\n")
-		}
+		lines = append(lines, m.agent.log[max(0, len(m.agent.log)-12):]...)
 		m.agent.mu.Unlock()
+	}
+	if len(lines) == 0 {
+		b.WriteString(ui.DimStyle.Render("Nothing yet.") + "\n")
+	}
+	for _, l := range lines {
+		b.WriteString(ui.Truncate(l, max(20, m.paneWidth()-2)) + "\n")
 	}
 	action := "enter start"
 	if m.agent != nil {
@@ -1068,7 +1143,10 @@ func runHome(cmd *cobra.Command, info BuildInfo) error {
 	m := newHomeModel(&homeEnv{root: cmd.Root(), version: info.Version})
 	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if fm, ok := final.(homeModel); ok && fm.agent != nil {
-		fm.agent.stop()
+		// Wait for the bridge (and the agent CLIs it started) to be gone.
+		if !fm.agent.shutdown(agentQuitWait) {
+			ui.Warn("Your agent for meetings did not stop; check for a leftover meetstream agent serve.")
+		}
 	}
 	return err
 }

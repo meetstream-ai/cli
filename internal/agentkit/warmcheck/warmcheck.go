@@ -180,6 +180,13 @@ func toolTurn(ctx context.Context, c config.Config, s Session, offersTools bool,
 		}
 		return fail(c, message, t0)
 	}
+	// A done that was cut short is the bridge's own reply, not the agent's.
+	if last["timed_out"] == true {
+		return fail(c, "the warm turn timed out", t0)
+	}
+	if last["cancelled"] == true {
+		return fail(c, "the warm turn was cancelled", t0)
+	}
 	listed := s.Listed()
 	if offersTools && !(called && strings.Contains(parsers.Str(last["text"]), word)) {
 		message := "warm mode answered, but did not call the meeting tool"

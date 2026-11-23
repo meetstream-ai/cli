@@ -25,6 +25,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/estimates"
 	"github.com/meetstream-ai/cli/internal/agentkit/parsers"
 	"github.com/meetstream-ai/cli/internal/agentkit/pricing"
+	"github.com/meetstream-ai/cli/internal/agentkit/proctree"
 	"github.com/meetstream-ai/cli/internal/agentkit/prompts"
 	"github.com/meetstream-ai/cli/internal/agentkit/usage"
 	"github.com/meetstream-ai/cli/internal/ui"
@@ -42,10 +43,15 @@ var sampleTurn = []map[string]any{
 }
 
 // benchExec runs one CLI process in dir and hands each stdout line to onLine.
-// It returns the last lines of stderr. Tests swap it so no CLI is started.
+// It returns the last lines of stderr. The CLI runs in its own process group:
+// a timeout or Stop kills everything it started, not only the CLI itself.
+// Tests swap it so no CLI is started.
 var benchExec = func(ctx context.Context, argv []string, dir, input string, env []string, onLine func(string)) (string, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir, cmd.Env, cmd.WaitDelay = dir, env, 3*time.Second
+	proctree.Prepare(cmd)
+	cmd.Cancel = func() error { return proctree.Kill(cmd) }
+	defer proctree.Reap(cmd)
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}
@@ -226,21 +232,25 @@ func benchUsage(spec agents.Spec, model string, turn usage.Usage) *bench.Usage {
 }
 
 // runBenchLive shows the live table while the queue runs (Esc stops and keeps
-// what finished). Tests swap it.
-var runBenchLive = func(ctx context.Context, q *bench.Queue) []bench.Job {
+// what finished); interrupted is ctrl+c. Tests swap it.
+var runBenchLive = func(ctx context.Context, q *bench.Queue) (jobs []bench.Job, interrupted bool) {
 	final, err := tea.NewProgram(bench.NewModel(ctx, q)).Run()
 	if err != nil {
 		q.Stop()
-		return q.Snapshot()
+		return q.Snapshot(), false
 	}
-	return final.(bench.Model).Jobs()
+	return final.(bench.Model).Jobs(), final.(bench.Model).Interrupted()
 }
+
+// benchLiveAllowed is whether the live table can show; tests swap it.
+var benchLiveAllowed = func() bool { return !g.JSON && ui.Interactive() }
 
 // runBenchQueue measures models a few at a time: the live table at a terminal,
 // else one plain line per finished model. Each finished measurement is saved
-// for the model picker (estimates.Save, serialized there).
-func runBenchQueue(ctx context.Context, spec agents.Spec, ids []string, run bench.Runner, m *measurer, opts bench.Options, allowLive bool) []bench.Job {
-	live := allowLive && !g.JSON && ui.Interactive()
+// for the model picker (estimates.Save, serialized there). interrupted is
+// ctrl+c (SIGINT, or the key in the live table): what finished is kept.
+func runBenchQueue(ctx context.Context, spec agents.Spec, ids []string, run bench.Runner, m *measurer, opts bench.Options, allowLive bool) (jobs []bench.Job, interrupted bool) {
+	live := allowLive && benchLiveAllowed()
 	opts.ReportsUsage = usage.ReportsUsage(spec.Name)
 	var printing sync.Mutex
 	opts.OnChange = func(j bench.Job) {
@@ -264,9 +274,10 @@ func runBenchQueue(ctx context.Context, spec agents.Spec, ids []string, run benc
 	if !g.JSON {
 		ui.Note(fmt.Sprintf("Measuring %d model(s), %d at a time.", len(ids), q.Workers()))
 	}
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
-	jobs := q.Run(ctx)
+	jobs = q.Run(sigCtx)
+	interrupted = sigCtx.Err() != nil && ctx.Err() == nil
 	stopped := 0
 	for _, j := range jobs {
 		if j.State == bench.Cancelled {
@@ -276,7 +287,7 @@ func runBenchQueue(ctx context.Context, spec agents.Spec, ids []string, run benc
 	if stopped > 0 && !g.JSON {
 		ui.Note(fmt.Sprintf("Stopped: %d model(s) not measured.", stopped))
 	}
-	return jobs
+	return jobs, interrupted
 }
 
 // benchRunner is how the bench command runs a model; tests may swap it.
@@ -394,7 +405,7 @@ func newAgentBenchCmd(info BuildInfo) *cobra.Command {
 				}
 			}
 			m := newMeasurer(spec, path)
-			jobs := runBenchQueue(cmd.Context(), spec, ids, benchRunner(m), m, bench.Options{Effort: effort, Parallel: parallel}, true)
+			jobs, interrupted := runBenchQueue(cmd.Context(), spec, ids, benchRunner(m), m, bench.Options{Effort: effort, Parallel: parallel}, true)
 			results := bench.Results(jobs)
 
 			exported, total := 0, 0
@@ -437,6 +448,23 @@ func newAgentBenchCmd(info BuildInfo) *cobra.Command {
 			if export != "" {
 				doc["export"] = map[string]any{"path": export, "written": exported, "models_in_file": total}
 			}
+			// The results are the one JSON document: a failure goes into it, and
+			// the error after it is silent there.
+			var failed *ExitError
+			switch {
+			case interrupted:
+				failed = &ExitError{Code: 130, Message: "bench interrupted; finished results are kept"}
+			case !measured:
+				failed = &ExitError{Code: 1, Message: "no model reported its token usage", Hint: "check the errors above; sign in to the CLI if it asks"}
+			}
+			if failed != nil {
+				e := map[string]any{"message": failed.Message, "exit_code": failed.Code}
+				if failed.Hint != "" {
+					e["hint"] = failed.Hint
+				}
+				doc["error"] = e
+				failed.Silent = g.JSON
+			}
 			if err := emit(doc, func() {
 				fmt.Fprintln(ui.Out)
 				for _, line := range bench.ChartLines(results, bench.ChartOptions{Selected: savedModel}) {
@@ -449,8 +477,8 @@ func newAgentBenchCmd(info BuildInfo) *cobra.Command {
 			}); err != nil {
 				return err
 			}
-			if !measured {
-				return &ExitError{Code: 1, Message: "no model reported its token usage", Hint: "check the errors above; sign in to the CLI if it asks"}
+			if failed != nil {
+				return failed
 			}
 			return nil
 		},

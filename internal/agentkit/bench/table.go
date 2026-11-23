@@ -247,12 +247,13 @@ type doneMsg struct{ jobs []Job }
 // ctrl+c) stops: running models are cancelled, finished results are kept,
 // and the model quits once the queue has wound down.
 type Model struct {
-	queue    *Queue
-	ctx      context.Context
-	frame    int
-	stopping bool
-	final    []Job
-	now      func() time.Time
+	queue       *Queue
+	ctx         context.Context
+	frame       int
+	stopping    bool
+	interrupted bool // ctrl+c, not Esc: the command exits 130
+	final       []Job
+	now         func() time.Time
 }
 
 // NewModel shows q while it runs; ctx cancels it like Esc does.
@@ -277,6 +278,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "q", "ctrl+c":
 			m.stopping = true
+			m.interrupted = m.interrupted || msg.String() == "ctrl+c"
 			m.queue.Stop()
 		}
 	case tickMsg:
@@ -310,3 +312,6 @@ func (m Model) Jobs() []Job {
 
 // Stopped reports whether the person pressed Esc.
 func (m Model) Stopped() bool { return m.stopping }
+
+// Interrupted reports whether the stop was ctrl+c.
+func (m Model) Interrupted() bool { return m.interrupted }

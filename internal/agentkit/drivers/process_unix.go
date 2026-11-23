@@ -5,16 +5,19 @@ package drivers
 import (
 	"os/exec"
 	"syscall"
+
+	"github.com/meetstream-ai/cli/internal/agentkit/proctree"
 )
 
-func prepare(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
+// killGroupAfterExit: a process group id is not reused while the group has
+// members, so killing it after the leader exited reaches only its helpers.
+const killGroupAfterExit = true
+
+func prepare(cmd *exec.Cmd) { proctree.Prepare(cmd) }
 func signal(cmd *exec.Cmd, kill bool) {
-	if cmd.Process == nil {
+	if kill {
+		_ = proctree.Kill(cmd)
 		return
 	}
-	sig := syscall.SIGTERM
-	if kill {
-		sig = syscall.SIGKILL
-	}
-	_ = syscall.Kill(-cmd.Process.Pid, sig)
+	_ = proctree.Signal(cmd, syscall.SIGTERM)
 }

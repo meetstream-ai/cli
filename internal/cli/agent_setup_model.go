@@ -287,7 +287,7 @@ func (w *setupWizard) measureLive(spec agents.Spec, binary string, listed models
 		}
 		return m.run(ctx, req)
 	}
-	jobs := runBenchQueue(w.cmd.Context(), spec, ids, run, m, bench.Options{Effort: effort}, true)
+	jobs, _ := runBenchQueue(w.cmd.Context(), spec, ids, run, m, bench.Options{Effort: effort}, true)
 	fmt.Fprintln(ui.Out)
 	for _, line := range bench.ChartLines(bench.Results(jobs), bench.ChartOptions{}) {
 		fmt.Fprintln(ui.Out, line)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -516,12 +517,27 @@ func readLine(r io.Reader) (string, error) {
 	}
 }
 
+// lockedWriter serializes writes from several goroutines.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
 // runPipeline runs stages[0] | stages[1] | … without a shell, streaming the last
 // stage's output and every stage's errors to out. It returns the first failing
 // stage's exit code (like pipefail), 127 when a stage cannot start.
 func runPipeline(stages [][]string, stdin io.Reader, out io.Writer) int {
 	if len(stages) == 0 {
 		return 0
+	}
+	if _, isFile := out.(*os.File); !isFile {
+		out = &lockedWriter{w: out} // every stage copies its output into out from its own goroutine
 	}
 	cmds := make([]*exec.Cmd, len(stages))
 	for i, st := range stages {

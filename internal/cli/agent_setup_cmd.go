@@ -168,6 +168,7 @@ type setupWizard struct {
 	last                               *kitconfig.Setup // setup.json from the last run, nil the first time
 	lastAgent, savedConfigID, miaID    string           // the last run's agent and MIA agent; the one this run made
 	tested, testResult, loginState     string           // the test that passed; passed/skipped/failed/started anyway; ok/expired/unknown
+	saveWarned                         bool             // a failed save of the answers was shown once
 }
 
 // setupInteractive is whether setup may ask; tests swap it to drive the menus.
@@ -470,7 +471,9 @@ func (w *setupWizard) resolvePicks() error {
 			return &ExitError{Code: 3, Message: "MeetStream hosted is not offered on this server", Hint: "use --mode byok (your keys), or --mode local-agent --voice-keys own"}
 		}
 	case modeLocal:
-		if !w.cat.hostedOffered(secEars, secVoice) && w.voiceKeys == keysMeetStream {
+		// Updating an agent keeps its ears and voice: what this server offers
+		// for new ones does not matter.
+		if !w.cat.hostedOffered(secEars, secVoice) && w.voiceKeys == keysMeetStream && w.targetID() == "" {
 			if w.interactive && !w.voiceKeysFlag {
 				w.voiceKeys = keysOwn
 			} else {
@@ -777,7 +780,7 @@ func (w *setupWizard) run(start string) error {
 		}
 		asked[steps[i].id] = a
 		if res == menuChosen {
-			w.saveAnswers()
+			_ = w.saveAnswers() // warned there; setup goes on, and finish saves again
 		}
 		switch res {
 		case menuQuit:
@@ -924,6 +927,10 @@ func (w *setupWizard) fallbackQuote(sections []string, rates any) quote {
 // then connects the calendar picked at the end and offers to start serving.
 func (w *setupWizard) finish() error {
 	cmd := w.cmd
+	// Again here: the last step may have switched from updating to a new agent.
+	if err := w.resolvePicks(); err != nil {
+		return err
+	}
 	name := w.defaultName()
 	body := map[string]any{"agent_name": name, "mode": "pipeline", "agent": map[string]any{"response_modality": "audio"}}
 	for _, s := range w.sections() {
@@ -976,6 +983,12 @@ func (w *setupWizard) finish() error {
 				ui.Note("Your last MIA agent (" + target + ") is gone; creating a new one.")
 			}
 			target, w.newAgent, err = "", true, nil
+			if err := w.resolvePicks(); err != nil { // a new one needs ears and voice this server offers
+				return err
+			}
+			for _, s := range w.sections() {
+				body[s] = w.sectionBody(s)
+			}
 			q = w.quote()
 		} else if err != nil {
 			return apiError(err)
@@ -985,8 +998,15 @@ func (w *setupWizard) finish() error {
 			if inner, ok := existing["agent_config"].(map[string]any); ok {
 				cfg = inner
 			}
+			if cfg == nil {
+				cfg = map[string]any{}
+			}
 			cfg["agent_config_id"] = target
-			cfg["model"] = body["model"]
+			old := cfg["model"]
+			if old == nil {
+				old = cfg["Model"] // the stored shape's key
+			}
+			cfg["model"] = mergeModelBlock(old, body["model"])
 			b, _ := json.Marshal(cfg)
 			err = c.Do(cmd.Context(), http.MethodPut, "/mia", bytes.NewReader(b), &resp)
 		}
@@ -1088,7 +1108,7 @@ func (w *setupWizard) finish() error {
 		return err
 	}
 	if w.calendar != "" {
-		if err := w.connectCalendar(); err != nil {
+		if err := w.connectCalendar(calendarBotConfig(cmd.Context(), c, id), name); err != nil {
 			return err
 		}
 	}
@@ -1105,10 +1125,62 @@ func (w *setupWizard) finish() error {
 	return nil
 }
 
-// connectCalendar runs the calendar sign-in picked in step 5. A server without
+// mergeModelBlock is the saved agent's model block with setup's answers:
+// provider, local_agent and the agent CLI's model (removed for the CLI's
+// default, since MIA passes model.model to the CLI). Everything else in it
+// (system_prompt, temperature, …) is kept.
+func mergeModelBlock(existing, update any) any {
+	up, ok := update.(map[string]any)
+	if !ok {
+		return existing
+	}
+	out := map[string]any{}
+	if old, ok := existing.(map[string]any); ok {
+		for k, v := range old {
+			out[k] = v
+		}
+	}
+	for _, k := range []string{"provider", "local_agent"} {
+		if v, ok := up[k]; ok {
+			out[k] = v
+		}
+	}
+	if v, ok := up["model"]; ok {
+		out["model"] = v
+	} else {
+		delete(out, "model")
+	}
+	return out
+}
+
+// calendarBotConfig is the calendar's default bot with the MIA agent setup made
+// (agent_config_id, as create_bot takes it): the auto-join bot already saved,
+// else a bot named MIA. The server stores the config it is given as a whole,
+// so the saved one is the base.
+func calendarBotConfig(ctx context.Context, c *api.Client, agentID string) map[string]any {
+	if agentID == "" {
+		return nil
+	}
+	cfg := map[string]any{"bot_name": "MIA", "audio_required": true, "video_required": false, "automatic_leave": map[string]any{"everyone_left_timeout": 60}}
+	var s struct {
+		Enabled bool           `json:"auto_schedule_enabled"`
+		Config  map[string]any `json:"default_bot_config"`
+	}
+	if err := c.Do(ctx, http.MethodGet, "/calendar/auto-schedule/settings", nil, &s); err == nil && s.Enabled && len(s.Config) > 0 {
+		cfg = s.Config
+	}
+	cfg["agent_config_id"] = agentID
+	return cfg
+}
+
+// connectCalendar runs the calendar sign-in picked in step 5, with bot (the
+// MIA agent's default bot config; nil keeps the server's). A server without
 // one-click connect, or a failure, leaves a note: the MIA agent already exists.
-func (w *setupWizard) connectCalendar() error {
-	_, err := runCalendarConnect(w.cmd, calendarConnectOptions{Provider: w.calendar})
+func (w *setupWizard) connectCalendar(bot map[string]any, agentName string) error {
+	if id, _ := bot["agent_config_id"].(string); id != "" && !g.JSON {
+		ui.Note("Bots that join your calendar meetings will run MIA agent " + agentName + " (" + id + ").")
+	}
+	_, err := runCalendarConnect(w.cmd, calendarConnectOptions{Provider: w.calendar, DefaultBotConfig: bot})
 	var ee *ExitError
 	switch {
 	case err == nil:

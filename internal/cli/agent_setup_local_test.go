@@ -94,7 +94,8 @@ func TestSignedOutGateMenu(t *testing.T) {
 	if res, err := w.gateSignIn(); res != menuChosen || err != nil {
 		t.Fatalf("%v %v", res, err)
 	}
-	if len(ran) != 1 || strings.Join(ran[0], " ") != "claude auth login" {
+	// The CLI setup found runs (it may be off PATH), not its bare name.
+	if len(ran) != 1 || strings.Join(ran[0], " ") != "/fake/claude auth login" {
 		t.Fatalf("sign-in ran %v", ran)
 	}
 	for _, want := range []string{"✗ Claude Code is signed out on this computer", "Running claude auth login.", "✓ Claude Code is signed in"} {
@@ -216,7 +217,7 @@ func TestTestTurnFailureMenu(t *testing.T) {
 		"❯ Sign in now (claude auth login), then test again\n    Test again\n    Start anyway (MIA cannot use your agent until it answers)\n    ← Back\n    Quit",
 		[]string{"enter"}}))
 	asked, res, err := w.stepTest()
-	if !asked || res != menuChosen || err != nil || w.testResult != "passed" || len(ran) != 1 {
+	if !asked || res != menuChosen || err != nil || w.testResult != "passed" || len(ran) != 1 || ran[0][0] != w.chosen.binary {
 		t.Fatalf("%v %v %v %q %v", asked, res, err, w.testResult, ran)
 	}
 	for _, want := range []string{"✗ Waking up Claude Code", "(failed)", "✗ Claude Code is signed out", "│ Please log in", "Fix: Sign in with: claude auth login",
@@ -435,10 +436,12 @@ func TestProjectRulesStep(t *testing.T) {
 
 // miaServer counts the MIA agent requests: POST creates cfg_1, GET and PUT update.
 type miaServer struct {
-	mu    sync.Mutex
-	calls []string
-	put   map[string]any
-	post  func(w http.ResponseWriter)
+	mu      sync.Mutex
+	calls   []string
+	put     map[string]any
+	post    func(w http.ResponseWriter)
+	catalog string // GET /mia's mia_managed; "" is demoCatalog
+	get     string // GET /mia?agent_config_id's answer; "" is a pipeline agent with a voice
 }
 
 func (s *miaServer) start(t *testing.T) string {
@@ -450,7 +453,7 @@ func (s *miaServer) start(t *testing.T) string {
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Query().Get("agent_config_id") == "" {
-			_, _ = w.Write([]byte(`{"agent_configs":[],"mia_managed":` + demoCatalog + `}`))
+			_, _ = w.Write([]byte(`{"agent_configs":[],"mia_managed":` + orDefault(s.catalog, demoCatalog) + `}`))
 			return
 		}
 		s.calls = append(s.calls, r.Method+" "+r.URL.Query().Get("agent_config_id"))
@@ -462,7 +465,7 @@ func (s *miaServer) start(t *testing.T) string {
 			}
 			_, _ = w.Write([]byte(`{"agent_config_id":"cfg_1"}`))
 		case http.MethodGet:
-			_, _ = w.Write([]byte(`{"agent_config":{"agent_name":"Claude Code in the meeting","voice":{"provider":"elevenlabs"}}}`))
+			_, _ = w.Write([]byte(orDefault(s.get, `{"agent_config":{"agent_name":"Claude Code in the meeting","voice":{"provider":"elevenlabs"}}}`)))
 		case http.MethodPut:
 			b, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(b, &s.put)

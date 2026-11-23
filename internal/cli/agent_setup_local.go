@@ -51,6 +51,15 @@ var setupSignIn = func(argv []string) int {
 	return 0
 }
 
+// signInArgv is the sign-in command run with the CLI setup found (binary),
+// which may be off PATH (e.g. ~/.local/bin), in place of its bare name.
+func signInArgv(argv []string, binary string) []string {
+	if binary == "" || len(argv) == 0 {
+		return argv
+	}
+	return append([]string{binary}, argv[1:]...)
+}
+
 func signInOption(argv []string) string {
 	return "Sign in now (`" + strings.Join(argv, " ") + "`)"
 }
@@ -91,12 +100,12 @@ func (w *setupWizard) gateSignIn() (menuResult, error) {
 		case res == menuBack:
 			return menuBack, nil
 		case res == menuQuit:
-			w.saveAnswers()
+			_ = w.saveAnswers() // warned there; the sign-in is what to fix
 			return menuQuit, signedOut(spec)
 		}
 		if argv != nil && i == 0 {
 			ui.Note("Running " + strings.Join(argv, " ") + ". Finish signing in there; setup checks again after.")
-			setupSignIn(argv)
+			setupSignIn(signInArgv(argv, w.chosen.binary))
 		}
 		st = setupLoginCheck(spec, w.chosen.binary)
 	}
@@ -612,7 +621,7 @@ func (w *setupWizard) stepTest() (bool, menuResult, error) {
 			return true, menuQuit, w.quitAfterTest(d.Message)
 		case "login":
 			ui.Note("Running " + strings.Join(login, " ") + ". Finish signing in there; this test runs again after.")
-			setupSignIn(login)
+			setupSignIn(signInArgv(login, w.chosen.binary))
 			continue
 		case "retry":
 			continue
@@ -655,9 +664,12 @@ func (w *setupWizard) stepTest() (bool, menuResult, error) {
 
 // quitAfterTest saves the answers and stops: the agent did not pass its test.
 func (w *setupWizard) quitAfterTest(why string) error {
-	w.saveAnswers()
 	w.testResult = "failed"
-	return &ExitError{Code: 1, Message: "test turn: " + why, Hint: "Saved your answers. Run `meetstream setup` again when the agent is ready."}
+	hint := "Saved your answers. Run `meetstream setup` again when the agent is ready."
+	if err := w.saveAnswers(); err != nil {
+		hint = "Your answers were not saved (" + err.Error() + "). Run `meetstream setup` again when the agent is ready."
+	}
+	return &ExitError{Code: 1, Message: "test turn: " + why, Hint: hint}
 }
 
 func clipText(s string, n int) string {
@@ -797,11 +809,17 @@ func (w *setupWizard) startWithLast() (bool, error) {
 
 // saveAnswers writes the local agent's answers so far to setup.json (each step
 // saves, so quitting keeps them). It keeps what setup does not ask (auto-start).
-func (w *setupWizard) saveAnswers() {
+// A failed save is returned, and warned about once.
+func (w *setupWizard) saveAnswers() error {
 	if w.mode != modeLocal || w.chosen == nil || w.dryRun {
-		return
+		return nil
 	}
-	_ = w.saved().Save("")
+	err := w.saved().Save("")
+	if err != nil && !g.JSON && !w.saveWarned {
+		w.saveWarned = true
+		ui.Warn("Could not save your answers: " + err.Error())
+	}
+	return err
 }
 
 func (w *setupWizard) saved() kitconfig.Setup {

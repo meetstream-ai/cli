@@ -15,6 +15,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/pairing"
 	"github.com/meetstream-ai/cli/internal/agentkit/parsers"
 	"github.com/meetstream-ai/cli/internal/agentkit/prompts"
+	"github.com/meetstream-ai/cli/internal/agentkit/redact"
 	"github.com/meetstream-ai/cli/internal/agentkit/session"
 	"io"
 	"net"
@@ -384,7 +385,12 @@ func (s *Server) turn(w http.ResponseWriter, r *http.Request, meeting *session.S
 	if speaker == "" {
 		speaker = "?"
 	}
-	s.Config.Log("[turn] " + clip(speaker, 40) + ": " + clip(parsers.Str(last["text"]), 160))
+	// The kit's line: who spoke and what, on this terminal only, secrets hidden.
+	if s.Config.HideTurnText {
+		s.Config.Log("[turn] " + redact.Secrets(clip(speaker, 40)))
+	} else {
+		s.Config.Log("[turn] " + redact.Secrets(clip(speaker, 40)+": "+clip(parsers.Str(last["text"]), 160)))
+	}
 	meeting.Run(r.Context(), prompts.Turn(messages), false, func(e session.Event) error {
 		if e["code"] == "auth_required" {
 			s.Login.Expired()
@@ -401,7 +407,7 @@ func (s *Server) turn(w http.ResponseWriter, r *http.Request, meeting *session.S
 				s.Config.Log(fmt.Sprintf("[done] first output %v ms, total %v ms", e["first_output_ms"], e["total_ms"]))
 			}
 		case "error": // never silent: every failed turn shows here
-			s.Config.Log("[error] " + parsers.Str(e["code"]) + ": " + clip(parsers.Str(e["message"]), 200))
+			s.Config.Log("[error] " + parsers.Str(e["code"]) + ": " + redact.Secrets(clip(parsers.Str(e["message"]), 200)))
 		}
 		if e["type"] == "done" || e["type"] == "error" {
 			s.Config.Event("turn_"+parsers.Str(e["type"]), map[string]any{"code": e["code"], "total_ms": e["total_ms"], "timed_out": e["timed_out"],

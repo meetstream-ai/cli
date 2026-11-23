@@ -15,6 +15,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/localapps"
 	"github.com/meetstream-ai/cli/internal/agentkit/meetingctx"
 	"github.com/meetstream-ai/cli/internal/agentkit/pairing"
+	"github.com/meetstream-ai/cli/internal/agentkit/redact"
 	"github.com/meetstream-ai/cli/internal/agentkit/relay"
 	"github.com/meetstream-ai/cli/internal/ui"
 	"github.com/spf13/cobra"
@@ -54,7 +55,7 @@ type agentServeOptions struct {
 	agent, command, binary, workdir, owner, model, effort, maxAccess, tunnel, tunnelURL string
 	port                                                                                int
 	timeout                                                                             float64
-	noPrime, noMeetingMD, ignoreRules, debug, relay, noRelay                            bool
+	noPrime, noMeetingMD, ignoreRules, debug, relay, noRelay, hideTurnText              bool
 }
 
 func (o agentServeOptions) build() (kitconfig.Config, error) {
@@ -109,7 +110,7 @@ func (o agentServeOptions) build() (kitconfig.Config, error) {
 	if !o.noMeetingMD {
 		notes = meetingctx.Notes()
 	}
-	return kitconfig.Config{Agent: a, Binary: binary, Workdir: workdir, MaxAccess: o.maxAccess, Owner: o.owner, Model: o.model, Effort: o.effort, Timeout: time.Duration(o.timeout * float64(time.Second)), Prime: !o.noPrime, MeetingNotes: notes, IgnoreRules: o.ignoreRules, Debug: o.debug || os.Getenv("MS_AGENT_KIT_DEBUG") == "1"}, nil
+	return kitconfig.Config{Agent: a, Binary: binary, Workdir: workdir, MaxAccess: o.maxAccess, Owner: o.owner, Model: o.model, Effort: o.effort, Timeout: time.Duration(o.timeout * float64(time.Second)), Prime: !o.noPrime, MeetingNotes: notes, IgnoreRules: o.ignoreRules, Debug: o.debug || os.Getenv("MS_AGENT_KIT_DEBUG") == "1", HideTurnText: o.hideTurnText}, nil
 }
 func newAgentServeCmd(info BuildInfo) *cobra.Command {
 	cwd, _ := os.Getwd()
@@ -136,6 +137,8 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 	f.BoolVar(&o.noMeetingMD, "no-meeting-md", false, "leave MEETING.md out of meetings")
 	f.BoolVar(&o.ignoreRules, "ignore-rules", false, "skip project rules where the agent supports it")
 	f.BoolVar(&o.debug, "debug", false, "log protocol message types, never their text")
+	f.BoolVar(&o.hideTurnText, "hide-turn-text", false, "log who spoke, not what they said (the home app's background agent)")
+	_ = f.MarkHidden("hide-turn-text")
 	f.StringVar(&o.tunnel, "tunnel", "none", "none, cloudflare, ngrok, or url")
 	f.StringVar(&o.tunnelURL, "tunnel-url", "", "existing https address or ngrok domain")
 	f.BoolVar(&o.relay, "relay", false, "require the MeetStream relay (default when this computer is connected)")
@@ -219,7 +222,9 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 			}
 		}
 		c.Notify = func(title, text string) {
-			out.say(ui.BoldStyle.Render(title) + ": " + text) // the activation code too, so always shown
+			// Queued, not waited for: the sign-in check below notifies on this
+			// goroutine before the header is drawn.
+			out.queue(ui.BoldStyle.Render(title) + ": " + text) // the activation code too, so always shown
 			alerts.Desktop(title, text)
 		}
 		if g.JSON {
@@ -317,7 +322,7 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 		case err := <-relayErr:
 			if err != nil {
 				c.Event("relay_stopped", map[string]any{"detail": err.Error()})
-				return &ExitError{Code: 2, Message: err.Error(), Hint: "run: meetstream agent login"}
+				return &ExitError{Code: 2, Message: redact.Secrets(err.Error()), Hint: "run: meetstream agent login"}
 			}
 			return nil
 		case err := <-served:
@@ -334,15 +339,41 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 // once the header box is up (events from the relay or a meeting can arrive
 // while it is being drawn).
 type serveOutput struct {
-	mu     sync.Mutex
-	header chan struct{}
-	once   sync.Once
+	mu      sync.Mutex
+	header  chan struct{}
+	once    sync.Once
+	shown   bool
+	pending []string // queue's lines until the header is up
 }
 
 func newServeOutput() *serveOutput { return &serveOutput{header: make(chan struct{})} }
 
-// headerShown releases the lines waiting for the header.
-func (o *serveOutput) headerShown() { o.once.Do(func() { close(o.header) }) }
+// headerShown prints the queued lines and releases the ones waiting.
+func (o *serveOutput) headerShown() {
+	o.once.Do(func() {
+		o.mu.Lock()
+		o.shown = true
+		for _, line := range o.pending {
+			fmt.Fprintln(ui.Out, line)
+		}
+		o.pending = nil
+		o.mu.Unlock()
+		close(o.header)
+	})
+}
+
+// queue is say without the wait: before the header it keeps the line for
+// headerShown. For callers that may run on the goroutine that draws the header
+// (the sign-in check before it notifies synchronously), where say would deadlock.
+func (o *serveOutput) queue(line string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.shown {
+		o.pending = append(o.pending, line)
+		return
+	}
+	fmt.Fprintln(ui.Out, line)
+}
 
 func (o *serveOutput) say(line string) {
 	<-o.header
@@ -363,6 +394,7 @@ func (o *serveOutput) json(w io.Writer, kind string, fields map[string]any) {
 // come through Config.Log; events only add the connection state.
 func serveEventLine(kind string, fields map[string]any, debug bool) (string, bool) {
 	detail, _ := fields["detail"].(string)
+	detail = redact.Secrets(detail)
 	switch kind {
 	case "ready":
 		return lipgloss.NewStyle().Foreground(ui.Green).Render("●") + " Running. Leave this window open; Ctrl-C stops the bridge.", true

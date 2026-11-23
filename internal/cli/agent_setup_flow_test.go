@@ -360,7 +360,7 @@ func TestMeasureLiveRunsTickedModels(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	setupFakes(t, twoModels())
 	swap(t, &benchExec, fakeClaudeExec(nil))
-	swap(t, &runBenchLive, func(ctx context.Context, q *bench.Queue) []bench.Job { return q.Run(ctx) })
+	swap(t, &runBenchLive, func(ctx context.Context, q *bench.Queue) ([]bench.Job, bool) { return q.Run(ctx), false })
 	useDriver(t, keysFor(t,
 		[]string{"down", "down", "down", "down", "enter"}, // Measure live
 		[]string{"enter"}, // the ticked models

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -53,6 +54,8 @@ type Env struct {
 	Readable    func(dir string) bool
 	Writable    func(dir string) bool
 	Listen      func(network, address string) (net.Listener, error)
+	GOOS        string                  // "" is this computer's (tests set "windows")
+	Getenv      func(key string) string // PATHEXT on Windows; nil is os.Getenv
 }
 
 // DefaultInstallDirs are where installers commonly put a CLI (the kit's _INSTALL_DIRS).
@@ -96,15 +99,55 @@ func DefaultEnv() Env {
 }
 
 func (e Env) expand(p string) string {
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		return filepath.Join(e.Home, strings.TrimPrefix(p, "~"))
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		return filepath.Join(e.Home, p[1:])
 	}
 	return p
 }
 
+// executable: a regular file with an execute bit, or on Windows (no mode
+// bits) one whose extension is in PATHEXT.
 func (e Env) executable(p string) bool {
 	fi, err := e.Stat(p)
-	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	if e.windows() {
+		return hasPathExt(p, e.pathExt())
+	}
+	return fi.Mode().Perm()&0o111 != 0
+}
+
+func (e Env) windows() bool {
+	if e.GOOS != "" {
+		return e.GOOS == "windows"
+	}
+	return runtime.GOOS == "windows"
+}
+
+// pathExt is PATHEXT, else Windows' default list.
+func (e Env) pathExt() string {
+	get := e.Getenv
+	if get == nil {
+		get = os.Getenv
+	}
+	if v := get("PATHEXT"); v != "" {
+		return v
+	}
+	return ".COM;.EXE;.BAT;.CMD"
+}
+
+func hasPathExt(p, pathExt string) bool {
+	ext := filepath.Ext(p)
+	if ext == "" {
+		return false
+	}
+	for _, x := range strings.Split(pathExt, ";") {
+		if x = strings.TrimSpace(x); x != "" && strings.EqualFold(x, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveBinary finds the agent CLI: an override path as given, else PATH,
@@ -129,6 +172,15 @@ func ResolveBinary(e Env, spec agents.Spec, override string) (path string, offPa
 	for _, dir := range e.InstallDirs {
 		if p := filepath.Join(dir, candidate); e.executable(p) {
 			return p, true
+		}
+		if e.windows() && filepath.Ext(candidate) == "" { // claude → claude.exe, claude.cmd …
+			for _, x := range strings.Split(e.pathExt(), ";") {
+				if x = strings.TrimSpace(x); x != "" {
+					if p := filepath.Join(dir, candidate+strings.ToLower(x)); e.executable(p) {
+						return p, true
+					}
+				}
+			}
 		}
 	}
 	return "", false

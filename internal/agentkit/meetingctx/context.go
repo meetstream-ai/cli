@@ -9,10 +9,12 @@ import (
 	"strings"
 )
 
+// Expand turns a leading ~ into the home folder: "~", "~/x", and "~\x" as
+// people type it on Windows.
 func Expand(s string) string {
-	if s == "~" || strings.HasPrefix(s, "~/") {
+	if s == "~" || strings.HasPrefix(s, "~/") || strings.HasPrefix(s, `~\`) {
 		h, _ := os.UserHomeDir()
-		return filepath.Join(h, strings.TrimPrefix(s, "~/"))
+		return filepath.Join(h, s[1:])
 	}
 	return s
 }
