@@ -132,7 +132,7 @@ var providerNames = map[string]string{
 	"openai": "OpenAI", "elevenlabs": "ElevenLabs", "google": "Google", "xai": "xAI", "smallest": "Smallest",
 	"sarvam": "Sarvam", "cartesia": "Cartesia", "deepgram": "Deepgram", "anthropic": "Anthropic", "assemblyai": "AssemblyAI",
 	"azure": "Azure", "groq": "Groq", "gemini": "Gemini", "outlook": "Microsoft", "microsoft": "Microsoft",
-	"meetstream": "MeetStream", "jigsawstack": "JigsawStack", "meeting_captions": "Meeting captions", "rime": "Rime",
+	"meetstream": "MeetStream", "jigsawstack": "Interfaze", "meeting_captions": "Meeting captions", "rime": "Rime",
 	"deepgram_streaming": "Deepgram (live)", "assemblyai_streaming": "AssemblyAI (live)", "smallest_streaming": "Smallest (live)",
 }
 
