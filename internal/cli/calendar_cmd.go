@@ -2,10 +2,12 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/meetstream-ai/cli/internal/api"
+	"github.com/meetstream-ai/cli/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -107,6 +109,27 @@ Bring your own Google OAuth app instead with --own-app --client-id ... --client-
 			return requestJSON(cmd, c, method, path, body)
 		})
 		sub.Short = shortFor(action) + " calendar data"
+		if action == "list" {
+			sub.RunE = func(cmd *cobra.Command, _ []string) error {
+				c, err := apiClient(cmd)
+				if err != nil {
+					return err
+				}
+				v, err := requestJSON(cmd, c, "GET", "/calendar/calendars", nil)
+				if err != nil {
+					return apiError(err)
+				}
+				return emit(v, func() {
+					// Human view only: auto-join state, best effort (no extra call for --json).
+					settings, serr := requestJSON(cmd, c, "GET", "/calendar/auto-schedule/settings", nil)
+					var s map[string]any
+					if serr == nil {
+						s = object(settings)
+					}
+					fmt.Fprintln(ui.Out, renderCalendarList(v, s, ui.Width()))
+				})
+			}
+		}
 		cal.AddCommand(sub)
 	}
 	var name string

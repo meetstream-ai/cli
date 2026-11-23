@@ -47,6 +47,7 @@ func executeSetup(t *testing.T, args ...string) *ExitError {
 	t.Setenv("MEETSTREAM_CONFIG_DIR", t.TempDir())
 	t.Setenv("MEETSTREAM_AGENT_KIT_HOME", t.TempDir())
 	t.Setenv("MEETSTREAM_AGENT_KIT_CREDENTIALS", "file")
+	isolateAgentLookup(t)
 	g = globals{}
 	root := NewRoot(BuildInfo{Version: "1.2.3"})
 	root.SetArgs(args)
@@ -80,6 +81,18 @@ func TestSetupMissingAgentNonInteractiveHintsAndExits2(t *testing.T) {
 	if ee := executeSetup(t, "setup", "--no-input"); ee == nil || ee.Code != 2 || !strings.Contains(ee.Message, "no supported agent") {
 		t.Fatalf("%+v", ee)
 	}
+}
+
+// isolateAgentLookup keeps agent detection to PATH and a fresh HOME, so a CLI
+// installed on the test machine (~/.local/bin, Homebrew) is never found.
+func isolateAgentLookup(t *testing.T) {
+	t.Helper()
+	if os.Getenv("HOME") == "" || !strings.HasPrefix(os.Getenv("HOME"), os.TempDir()) {
+		t.Setenv("HOME", t.TempDir())
+	}
+	old := systemInstallDirs
+	systemInstallDirs = nil
+	t.Cleanup(func() { systemInstallDirs = old })
 }
 
 // fakeBin writes executable stubs into a fresh folder.
@@ -207,12 +220,16 @@ func key(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-// Step 1: Esc cancels (setup returns exit 130); Enter picks.
+// The agent picker: Esc goes back to step 1, q cancels (exit 130); Enter picks.
 func TestPickModelEscCancels(t *testing.T) {
 	items := []agentChoice{{name: "claude", label: "Claude Code"}, {name: "muse", label: "Muse Code"}}
 	m, cmd := pickModel{items: items}.Update(key("esc"))
-	if !isQuit(cmd) || m.(pickModel).chosen != nil {
-		t.Fatal("esc at step 1 should quit with nothing chosen")
+	if !isQuit(cmd) || m.(pickModel).chosen != nil || !m.(pickModel).back {
+		t.Fatal("esc in the agent picker should go back to step 1 with nothing chosen")
+	}
+	m, cmd = pickModel{items: items}.Update(key("q"))
+	if !isQuit(cmd) || m.(pickModel).chosen != nil || m.(pickModel).back {
+		t.Fatal("q in the agent picker should cancel")
 	}
 	m, _ = pickModel{items: items}.Update(key("down"))
 	m, cmd = m.Update(key("enter"))

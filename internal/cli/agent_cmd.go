@@ -5,17 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/meetstream-ai/cli/internal/agentkit/access"
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
 	"github.com/meetstream-ai/cli/internal/agentkit/alerts"
 	"github.com/meetstream-ai/cli/internal/agentkit/bridge"
+	"github.com/meetstream-ai/cli/internal/agentkit/checks"
 	kitconfig "github.com/meetstream-ai/cli/internal/agentkit/config"
 	"github.com/meetstream-ai/cli/internal/agentkit/localapps"
 	"github.com/meetstream-ai/cli/internal/agentkit/meetingctx"
 	"github.com/meetstream-ai/cli/internal/agentkit/pairing"
+	"github.com/meetstream-ai/cli/internal/agentkit/redact"
 	"github.com/meetstream-ai/cli/internal/agentkit/relay"
 	"github.com/meetstream-ai/cli/internal/ui"
 	"github.com/spf13/cobra"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -34,7 +38,7 @@ func newAgentCmd(info BuildInfo) *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "Run your own agent CLI in MIA meetings", GroupID: "agent"}
 	setup := newAgentSetupCmd(info)
 	cmd.AddCommand(newAgentServeCmd(info), newAgentContextCmd(), setup, newAgentStdioCmd(),
-		newAgentLoginCmd(info), newAgentLogoutCmd(), newAgentStatusCmd())
+		newAgentLoginCmd(info), newAgentLogoutCmd(), newAgentStatusCmd(), newAgentBenchCmd(info))
 	return cmd
 }
 func newAgentStdioCmd() *cobra.Command {
@@ -51,7 +55,7 @@ type agentServeOptions struct {
 	agent, command, binary, workdir, owner, model, effort, maxAccess, tunnel, tunnelURL string
 	port                                                                                int
 	timeout                                                                             float64
-	noPrime, noMeetingMD, ignoreRules, debug, relay, noRelay                            bool
+	noPrime, noMeetingMD, ignoreRules, debug, relay, noRelay, hideTurnText              bool
 }
 
 func (o agentServeOptions) build() (kitconfig.Config, error) {
@@ -91,7 +95,12 @@ func (o agentServeOptions) build() (kitconfig.Config, error) {
 	}
 	binary, err = exec.LookPath(meetingctx.Expand(binary))
 	if err != nil {
-		return kitconfig.Config{}, usageErr("agent CLI is not installed", a.InstallHint)
+		// Installed where PATH does not look yet (e.g. ~/.local/bin): use that path.
+		found, _ := checks.ResolveBinary(agentEnv(), a, o.binary)
+		if found == "" {
+			return kitconfig.Config{}, usageErr("agent CLI is not installed", a.InstallHint)
+		}
+		binary = found
 	}
 	binary, err = filepath.Abs(binary)
 	if err != nil {
@@ -101,7 +110,7 @@ func (o agentServeOptions) build() (kitconfig.Config, error) {
 	if !o.noMeetingMD {
 		notes = meetingctx.Notes()
 	}
-	return kitconfig.Config{Agent: a, Binary: binary, Workdir: workdir, MaxAccess: o.maxAccess, Owner: o.owner, Model: o.model, Effort: o.effort, Timeout: time.Duration(o.timeout * float64(time.Second)), Prime: !o.noPrime, MeetingNotes: notes, IgnoreRules: o.ignoreRules, Debug: o.debug || os.Getenv("MS_AGENT_KIT_DEBUG") == "1"}, nil
+	return kitconfig.Config{Agent: a, Binary: binary, Workdir: workdir, MaxAccess: o.maxAccess, Owner: o.owner, Model: o.model, Effort: o.effort, Timeout: time.Duration(o.timeout * float64(time.Second)), Prime: !o.noPrime, MeetingNotes: notes, IgnoreRules: o.ignoreRules, Debug: o.debug || os.Getenv("MS_AGENT_KIT_DEBUG") == "1", HideTurnText: o.hideTurnText}, nil
 }
 func newAgentServeCmd(info BuildInfo) *cobra.Command {
 	cwd, _ := os.Getwd()
@@ -128,6 +137,8 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 	f.BoolVar(&o.noMeetingMD, "no-meeting-md", false, "leave MEETING.md out of meetings")
 	f.BoolVar(&o.ignoreRules, "ignore-rules", false, "skip project rules where the agent supports it")
 	f.BoolVar(&o.debug, "debug", false, "log protocol message types, never their text")
+	f.BoolVar(&o.hideTurnText, "hide-turn-text", false, "log who spoke, not what they said (the home app's background agent)")
+	_ = f.MarkHidden("hide-turn-text")
 	f.StringVar(&o.tunnel, "tunnel", "none", "none, cloudflare, ngrok, or url")
 	f.StringVar(&o.tunnelURL, "tunnel-url", "", "existing https address or ngrok domain")
 	f.BoolVar(&o.relay, "relay", false, "require the MeetStream relay (default when this computer is connected)")
@@ -169,6 +180,18 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 			if !fl.Changed("model") && saved.Model != "" {
 				o.model = saved.Model
 			}
+			if !fl.Changed("effort") && saved.Effort != "" {
+				o.effort = saved.Effort
+			}
+			if !fl.Changed("owner") && saved.Owner != "" {
+				o.owner = saved.Owner
+			}
+			if !fl.Changed("ignore-rules") && saved.IgnoreRules == "yes" {
+				o.ignoreRules = true
+			}
+			if !fl.Changed("no-meeting-md") && saved.MeetingMD == "no" {
+				o.noMeetingMD = true
+			}
 		}
 		c, err := o.build()
 		if err != nil {
@@ -183,22 +206,29 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 				return usageErr("no pairing and no relay sign-in yet", "run: meetstream agent login  (or meetstream agent setup)")
 			}
 		}
-		var outputMu sync.Mutex
+		// Human lines wait for the header box: nothing prints above it.
+		out := newServeOutput()
+		defer out.headerShown()
 		c.Event = func(kind string, fields map[string]any) {
-			outputMu.Lock()
-			defer outputMu.Unlock()
 			if g.JSON {
-				fields["event"] = kind
-				_ = json.NewEncoder(cmd.OutOrStdout()).Encode(fields)
-			} else if kind != "protocol" || c.Debug {
-				ui.Note(strings.ReplaceAll(kind, "_", " "))
+				out.json(cmd.OutOrStdout(), kind, fields)
+			} else if line, ok := serveEventLine(kind, fields, c.Debug); ok {
+				out.say(line)
+			}
+		}
+		c.Log = func(line string) {
+			if !g.JSON {
+				out.say(line)
 			}
 		}
 		c.Notify = func(title, text string) {
-			outputMu.Lock()
-			fmt.Fprintln(ui.Out, ui.BoldStyle.Render(title)+": "+text)
-			outputMu.Unlock()
+			// Queued, not waited for: the sign-in check below notifies on this
+			// goroutine before the header is drawn.
+			out.queue(ui.BoldStyle.Render(title) + ": " + text) // the activation code too, so always shown
 			alerts.Desktop(title, text)
+		}
+		if g.JSON {
+			out.headerShown() // no header in JSON mode
 		}
 		c.Confirm = agentConfirmer(cmd)
 		server := bridge.New(c)
@@ -230,7 +260,7 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 		if relayMode {
 			internal := pairing.Secret(32)
 			server.SetInternalToken(internal)
-			relayState = "connecting"
+			relayState = "connecting… (updates below)"
 			cl := &relay.Client{
 				Store: relay.NewStore(), Creds: creds, Bridge: server, InternalToken: internal,
 				Hello: relay.HelloFields(c.Agent.Name, c.Agent.Label, status.State, c.MaxAccess),
@@ -248,13 +278,38 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 				},
 			}
 			go func() { relayErr <- cl.Run(ctx) }()
+		} else if address != "" {
+			relayState = "off · tunnel " + address
 		}
 		if !g.JSON {
+			how := "one run per turn"
+			if c.Agent.Warm != "" {
+				how = "warm session per meeting"
+			}
+			login := status.State
+			if status.State != "ok" && status.Detail != "" {
+				login += " (" + status.Detail + ")"
+			}
 			ui.Header(info.Version, "Your agent in the meeting")
-			ui.Box("Local bridge", [][2]string{{"agent", c.Agent.Label}, {"access", c.MaxAccess}, {"folder", ui.ShortPath(c.Workdir)}, {"listen", fmt.Sprintf("127.0.0.1:%d", server.Port)}, {"login", status.State}, {"relay", relayState}})
-			ui.Note("Leave this window open; Ctrl-C stops the bridge.")
+			ui.Box("Local bridge", [][2]string{{"agent", c.Agent.Label + " (" + how + ")"}, {"folder", ui.ShortPath(c.Workdir)}, {"access", c.MaxAccess},
+				{"model", orDefault(c.Model, "the CLI's default")}, {"effort", orDefault(c.Effort, "the CLI's default")},
+				{"context", meetingctx.Summary(c.Agent, c.Workdir, c.IgnoreRules, c.MeetingNotes != "")},
+				{"listen", fmt.Sprintf("127.0.0.1:%d", server.Port)}, {"login", login}, {"relay", relayState}})
+			if status.State == "expired" {
+				ui.Fail(c.Agent.Label + " is signed out. Sign in again with:")
+				ui.Command(c.Agent.Relogin)
+			}
+			if c.MaxAccess == "full" {
+				ui.Warn("FULL access: the agent may run shell commands and change files without asking, but only in")
+				ui.Note("meetings where only you (by verified id or activation code) can talk to it; otherwise it asks.")
+			}
+			if o.command != "" {
+				ui.Warn("A custom command runs with your own permissions; the bridge cannot limit it.")
+			}
+			fmt.Fprintln(ui.Out)
 		}
-		fields := map[string]any{"port": server.Port, "agent": c.Agent.Name, "access": c.MaxAccess, "login": status.State}
+		out.headerShown()
+		fields := map[string]any{"port": server.Port, "agent": c.Agent.Name, "access": c.MaxAccess, "login": status.State, "relay": relayMode, "warm": c.Agent.Warm != ""}
 		if address != "" {
 			fields["address"] = address
 		}
@@ -266,7 +321,8 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 			return nil
 		case err := <-relayErr:
 			if err != nil {
-				return &ExitError{Code: 2, Message: err.Error(), Hint: "run: meetstream agent login"}
+				c.Event("relay_stopped", map[string]any{"detail": err.Error()})
+				return &ExitError{Code: 2, Message: redact.Secrets(err.Error()), Hint: "run: meetstream agent login"}
 			}
 			return nil
 		case err := <-served:
@@ -277,6 +333,95 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 		}
 	}
 	return cmd
+}
+
+// serveOutput is serve's terminal: one line at a time, and human lines only
+// once the header box is up (events from the relay or a meeting can arrive
+// while it is being drawn).
+type serveOutput struct {
+	mu      sync.Mutex
+	header  chan struct{}
+	once    sync.Once
+	shown   bool
+	pending []string // queue's lines until the header is up
+}
+
+func newServeOutput() *serveOutput { return &serveOutput{header: make(chan struct{})} }
+
+// headerShown prints the queued lines and releases the ones waiting.
+func (o *serveOutput) headerShown() {
+	o.once.Do(func() {
+		o.mu.Lock()
+		o.shown = true
+		for _, line := range o.pending {
+			fmt.Fprintln(ui.Out, line)
+		}
+		o.pending = nil
+		o.mu.Unlock()
+		close(o.header)
+	})
+}
+
+// queue is say without the wait: before the header it keeps the line for
+// headerShown. For callers that may run on the goroutine that draws the header
+// (the sign-in check before it notifies synchronously), where say would deadlock.
+func (o *serveOutput) queue(line string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.shown {
+		o.pending = append(o.pending, line)
+		return
+	}
+	fmt.Fprintln(ui.Out, line)
+}
+
+func (o *serveOutput) say(line string) {
+	<-o.header
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	fmt.Fprintln(ui.Out, line)
+}
+
+func (o *serveOutput) json(w io.Writer, kind string, fields map[string]any) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	fields["event"] = kind
+	_ = json.NewEncoder(w).Encode(fields)
+}
+
+// serveEventLine is the terminal line for a bridge event, like the kit's. The
+// meeting's own lines ([session], [turn], [tool], [done], [error], [activate])
+// come through Config.Log; events only add the connection state.
+func serveEventLine(kind string, fields map[string]any, debug bool) (string, bool) {
+	detail, _ := fields["detail"].(string)
+	detail = redact.Secrets(detail)
+	switch kind {
+	case "ready":
+		return lipgloss.NewStyle().Foreground(ui.Green).Render("●") + " Running. Leave this window open; Ctrl-C stops the bridge.", true
+	case "relay_connected":
+		return ui.OKLine("Relay connected: MeetStream can reach your agent"), true
+	case "relay_disconnected":
+		return ui.WarnLine("Relay reconnecting" + withPrefix(": ", detail)), true
+	case "relay_stopped":
+		return ui.FailLine("Relay stopped" + withPrefix(": ", detail)), true
+	case "stopped":
+		return "stopped", true
+	case "relay", "protocol":
+		if !debug {
+			return "", false
+		}
+		return "[debug] " + kind + withPrefix(": ", detail), true
+	case "session_started", "turn_done", "turn_error", "tool_call", "activation":
+		return "", false // Config.Log has the line
+	}
+	return ui.NoteLine(strings.ReplaceAll(kind, "_", " ")), true
+}
+
+func withPrefix(prefix, s string) string {
+	if s == "" {
+		return ""
+	}
+	return prefix + s
 }
 
 // One reader owns stdin. Expired answers are tagged and discarded so a late yes

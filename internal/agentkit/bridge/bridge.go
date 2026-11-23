@@ -15,6 +15,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/pairing"
 	"github.com/meetstream-ai/cli/internal/agentkit/parsers"
 	"github.com/meetstream-ai/cli/internal/agentkit/prompts"
+	"github.com/meetstream-ai/cli/internal/agentkit/redact"
 	"github.com/meetstream-ai/cli/internal/agentkit/session"
 	"io"
 	"net"
@@ -71,6 +72,10 @@ func (s *Server) Start(ctx context.Context, id string, settings session.Settings
 		}
 		if newSession.Activation == nil {
 			newSession.Activation = activation.New(s.Config.Agent.Label, s.Config.Notify)
+			newSession.Activation.Log = func(text string) {
+				s.Config.Log("[activate] " + id + ": " + text)
+				s.Config.Event("activation", map[string]any{"session_id": id, "claim": activationState(text)})
+			}
 		}
 	}
 	s.sessions[id] = newSession
@@ -81,6 +86,18 @@ func (s *Server) Start(ctx context.Context, id string, settings session.Settings
 	_ = newSession.Start(ctx)
 	return newSession, false
 }
+
+// activationState is the claim state an activation log line reports (no names in events).
+func activationState(text string) string {
+	switch {
+	case strings.HasPrefix(text, "activated"):
+		return "claimed"
+	case strings.HasPrefix(text, "too many"):
+		return "locked"
+	}
+	return "released"
+}
+
 func (s *Server) End(id string) bool {
 	s.mu.Lock()
 	meeting := s.sessions[id]
@@ -200,6 +217,15 @@ func (s *Server) loginPayload(force bool) map[string]any {
 	}
 	return v
 }
+
+// clip keeps a log line's quote to n characters.
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
 func merge(a, b map[string]any) map[string]any {
 	for k, v := range b {
 		a[k] = v
@@ -316,7 +342,20 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, body map[string]a
 	if meeting.Warm() && s.Config.Prime && !reused {
 		go meeting.Run(context.Background(), "<meeting_turns>\n[system]: The meeting is starting. Reply with the single word: ready\n</meeting_turns>", true, func(session.Event) error { return nil })
 	}
-	s.Config.Event("session_started", map[string]any{"agent": s.Config.Agent.Name, "warm": meeting.Warm(), "reused": reused, "access": decision.Level})
+	how, mode := "started", "one run per turn"
+	if reused {
+		how = "reused"
+	}
+	if meeting.Warm() {
+		mode = "warm"
+	}
+	reason := ""
+	if decision.Reason != "" {
+		reason = ": " + decision.Reason
+	}
+	s.Config.Log(fmt.Sprintf("[session] %s: %s (%s, %s, %d meeting tools, access %s%s)", id, how, s.Config.Agent.Label, mode, len(meeting.Settings.Tools), decision.Level, reason))
+	s.Config.Event("session_started", map[string]any{"agent": s.Config.Agent.Name, "warm": meeting.Warm(), "reused": reused, "access": decision.Level,
+		"session_id": id, "tools": len(meeting.Settings.Tools), "access_reason": decision.Reason})
 	jsonReply(w, 200, merge(map[string]any{"agent": s.Config.Agent.Name, "warm": meeting.Warm(), "reused": reused, "spawn_ms": meeting.Driver.SpawnMS(), "access": decision.Level, "max_access": s.Config.MaxAccess, "access_reason": decision.Reason, "claim": meeting.ClaimState()}, login))
 }
 func (s *Server) turn(w http.ResponseWriter, r *http.Request, meeting *session.Session, body map[string]any) {
@@ -341,13 +380,38 @@ func (s *Server) turn(w http.ResponseWriter, r *http.Request, meeting *session.S
 	w.WriteHeader(200)
 	controller := http.NewResponseController(w)
 	_ = controller.Flush()
+	last := messages[len(messages)-1]
+	speaker := parsers.Str(last["speaker"])
+	if speaker == "" {
+		speaker = "?"
+	}
+	// The kit's line: who spoke and what, on this terminal only, secrets hidden.
+	if s.Config.HideTurnText {
+		s.Config.Log("[turn] " + redact.Secrets(clip(speaker, 40)))
+	} else {
+		s.Config.Log("[turn] " + redact.Secrets(clip(speaker, 40)+": "+clip(parsers.Str(last["text"]), 160)))
+	}
 	meeting.Run(r.Context(), prompts.Turn(messages), false, func(e session.Event) error {
 		if e["code"] == "auth_required" {
 			s.Login.Expired()
 			e["relogin"] = s.Config.Agent.Relogin
 		}
+		switch e["type"] {
+		case "tool_call":
+			s.Config.Log("[tool] " + parsers.Str(e["name"]))
+			s.Config.Event("tool_call", map[string]any{"session_id": meeting.ID, "name": e["name"]})
+		case "done":
+			if e["timed_out"] == true {
+				s.Config.Log(fmt.Sprintf("[timeout] stopped after %v ms; MIA says: %s", e["total_ms"], config.TimeoutReply))
+			} else {
+				s.Config.Log(fmt.Sprintf("[done] first output %v ms, total %v ms", e["first_output_ms"], e["total_ms"]))
+			}
+		case "error": // never silent: every failed turn shows here
+			s.Config.Log("[error] " + parsers.Str(e["code"]) + ": " + redact.Secrets(clip(parsers.Str(e["message"]), 200)))
+		}
 		if e["type"] == "done" || e["type"] == "error" {
-			s.Config.Event("turn_"+parsers.Str(e["type"]), map[string]any{"code": e["code"], "total_ms": e["total_ms"], "timed_out": e["timed_out"]})
+			s.Config.Event("turn_"+parsers.Str(e["type"]), map[string]any{"code": e["code"], "total_ms": e["total_ms"], "timed_out": e["timed_out"],
+				"session_id": meeting.ID, "first_output_ms": e["first_output_ms"]})
 		}
 		if err := json.NewEncoder(w).Encode(e); err != nil {
 			return err

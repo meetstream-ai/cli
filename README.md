@@ -2,10 +2,11 @@
 
 # MeetStream CLI
 
-**Meeting bots, transcripts and your own agent in the call, from one command.**
+**Make your own note-taker, or let your agent join the call.**
 
-Send bots to Google Meet, Zoom and Microsoft Teams, read transcripts and recordings,<br>
-and let Claude Code, Codex and other agent CLIs answer out loud in the meeting.
+Still pasting meeting transcripts into Claude? Bring your own agent into Google Meet, Zoom and Teams:<br>
+build your own note-taker, or send Claude Code, Codex or Hermes to listen, act on your tools and answer live.<br>
+Your prompts, your rules. One command.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Platforms](https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-amd64%20·%20arm64-f97316)
@@ -60,7 +61,7 @@ printf %s "$MEETSTREAM_API_KEY" | meetstream auth set-key  # from stdin
 | Node | `npm install -g @meetstream/cli` or `npx @meetstream/cli` |
 | Python | `pipx install meetstream` or `uvx meetstream` |
 | Homebrew | `brew install meetstream-ai/tap/meetstream` |
-| Nothing | download a binary from [Releases](../../releases) |
+| Nothing | download a binary from [Releases](https://github.com/meetstream-ai/cli/releases) |
 
 Each package carries the binary for your platform: macOS, Linux or Windows, on
 amd64 or arm64. Nothing is downloaded at install time.
@@ -82,7 +83,7 @@ and set `MEETSTREAM_API_KEY`.
 | Command | What it does | Status |
 |---|---|---|
 | `meetstream` | Home screen: an arrow-key menu of the common tasks | ✅ |
-| `doctor` | Checks the API key, config file and agent CLIs | ✅ |
+| `doctor` | Checks the API key, then your agent CLI: installed (also off PATH), signed in, warm (ACP) session, this computer's relay connection, folder and meeting context; prints a verdict and exits 1 when a check fails (`--agent`, `--binary`, `--no-warm`) | ✅ |
 | `auth status` / `auth logout` | Checks the key in use with the API (masked; `--offline` skips the check) / removes the stored one | ✅ |
 | `docs` | Shows this README in your terminal | ✅ |
 | `skill` | Prints [SKILL.md](SKILL.md) for coding agents | ✅ |
@@ -101,7 +102,8 @@ and set `MEETSTREAM_API_KEY`.
 | `recordings <bot-id>` | Prints audio and video links | ✅ |
 | `balance` | Shows your prepaid balance | ✅ |
 | `mia list/get/create/update/delete/check` | Manages MIA agent configs and checks the local bridge | ✅ |
-| `setup` (= `agent setup`) | Picks your agent CLI, connects this computer to MeetStream, creates the MIA agent | ✅ |
+| `setup` (= `agent setup`) | Step 1 asks how MIA runs in your meetings: MeetStream hosted, MIA with your keys (BYOK), your agent on your computer, or all local (preview, not available yet). Each option shows its price per hour for your account, as a breakdown (meeting, MIA harness, ears, brain, voice); prices are shown in setup and come from the API, never from the CLI. Then the chosen branch: hosted names and creates the agent; BYOK picks ears, brain and voice for your own keys (add them in the dashboard; setup never asks for keys); your agent picks the agent CLI (installs it if missing), its model and effort, MeetStream or your own keys for ears and voice, and connects this computer. Optionally connect your calendar last. Esc or "← Back" goes back on every step. `--mode hosted\|byok\|local-agent` (default local-agent), `--voice-keys meetstream\|own`, `--ears/--brain/--voice provider:model`, `--model`, `--effort`, `--no-calendar`, `--dry-run` (the request and its price); with `--no-input` it never asks and uses the flags or the defaults | ✅ |
+| `agent bench` | Measures your agent's models: one short real meeting turn each, a few at a time, as tokens and API-rate cost per hour of meeting (live table in a terminal; Esc stops and keeps finished results). `--compare` measures the CLI's own list, `--models a,b`, `--parallel N`, `--effort`, `--export file` writes a model-estimates.json. For CLIs that report token usage (Claude Code, Codex, Antigravity, Hermes) | ✅ |
 | `agent serve` | Runs your agent for MIA over the MeetStream relay (no tunnel); `--no-relay --tunnel …` to self-host | ✅ |
 | `agent login` / `logout` / `status` | This computer's relay sign-in (shared with the Python kit) | ✅ |
 | `agent context show|edit` | What your agent reads in meetings (MEETING.md) | ✅ |
@@ -137,8 +139,8 @@ The CLI never prints or logs your key. Status output shows only the last four ch
 
 ## Status
 
-Everything in the command table marked ✅ works today. Planned next: `bots tail` over the relay,
-`agent bench`, a model picker with costs, and `agent pair/list/revoke` for tunnel mode.
+Everything in the command table marked ✅ works today. Planned next: `bots tail` over the relay
+and `agent pair/list/revoke` for tunnel mode.
 `meetstream` replaces `@meetstream/cli` and `meetstream-agent-kit`; both keep working during the switch.
 
 ## Development

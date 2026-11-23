@@ -14,7 +14,7 @@ import (
 )
 
 // `meetstream agent login|logout|status`: this computer's sign-in for the
-// MeetStream relay (MS-2366). No API key and no pairing token: the relay
+// MeetStream relay. No API key and no pairing token: the relay
 // knows this computer by its device grant.
 
 const relayRevokeTimeout = 10 * time.Second

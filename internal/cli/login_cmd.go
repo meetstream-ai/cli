@@ -62,13 +62,17 @@ For CI, pipe a key in instead:  printf %s "$KEY" | meetstream login --with-key`,
 					// sign-in server. Until then, a pasted key is the way in.
 					if g.JSON || g.NoInput || !ui.Interactive() {
 						return &ExitError{Code: 2, Message: "browser sign-in isn't available on " + login.AuthURL() + " yet",
-							Hint: "create a key at https://app.meetstream.ai/api-keys, then: printf %s \"$KEY\" | meetstream auth set-key  (or set MEETSTREAM_API_KEY)"}
+							Hint: "create a key " + keysWhere() + ", then: printf %s \"$KEY\" | meetstream auth set-key  (or set MEETSTREAM_API_KEY)"}
 					}
 					ui.Header(info.Version, "Sign in with an API key")
 					fmt.Fprintln(ui.Out)
 					ui.Warn("Browser sign-in for the CLI isn't switched on at " + login.AuthURL() + " yet.")
-					ui.Note("Use an API key instead. Create one here, then paste it below (it stays hidden):")
-					ui.Command("https://app.meetstream.ai/api-keys")
+					if u := dashboardURL("/api-keys"); u != "" {
+						ui.Note("Use an API key instead. Create one here, then paste it below (it stays hidden):")
+						ui.Command(u)
+					} else {
+						ui.Note("Use an API key instead. Create one in the dashboard of " + serverLabel() + ", then paste it below (it stays hidden).")
+					}
 					fmt.Fprintln(ui.Out)
 					key, perr := promptKey()
 					if perr != nil {
@@ -139,7 +143,7 @@ func promptKey() (string, error) {
 	}
 	key := strings.TrimSpace(string(b))
 	if key == "" {
-		return "", usageErr("no key entered", "create one at https://app.meetstream.ai/api-keys")
+		return "", usageErr("no key entered", "create one "+keysWhere())
 	}
 	return key, nil
 }
@@ -170,7 +174,7 @@ func newSetKeyCmd(info BuildInfo) *cobra.Command {
 			case g.NoInput:
 				return usageErr("no key given", `pipe it in: printf %s "$KEY" | meetstream auth set-key`)
 			default:
-				ui.Note("Create a key at https://app.meetstream.ai/api-keys")
+				ui.Note("Create a key " + keysWhere())
 				key, err = promptKey()
 			}
 			if err != nil {
@@ -207,7 +211,13 @@ func saveKey(cmd *cobra.Command, info BuildInfo, res *login.Result) error {
 	return emit(out, func() {
 		ui.OK("Signed in. Key " + config.Mask(res.APIKey) + " saved to " + ui.ShortPath(config.Path()))
 		if res.APIKeyName != "" {
-			ui.Note("Key name: " + res.APIKeyName + " (manage it at https://app.meetstream.ai/api-keys)")
+			note := "Key name: " + res.APIKeyName
+			if u := dashboardURL("/api-keys"); u != "" {
+				note += " (manage it at " + u + ")"
+			} else {
+				note += " (on " + serverLabel() + ")"
+			}
+			ui.Note(note)
 		}
 		if verr != nil {
 			ui.Warn("Saved, but could not check the key with the API: " + verr.Error())
@@ -245,4 +255,13 @@ func offerCalendarConnect(cmd *cobra.Command) error {
 	ui.Note("Connect your calendar later with:")
 	ui.Command("meetstream calendar connect")
 	return nil
+}
+
+// keysWhere says where to create an API key: the dashboard link on production,
+// else the server's own dashboard (whose address we cannot know).
+func keysWhere() string {
+	if u := dashboardURL("/api-keys"); u != "" {
+		return "at " + u
+	}
+	return "in the dashboard of " + serverLabel()
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	kitconfig "github.com/meetstream-ai/cli/internal/agentkit/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ func run(t *testing.T, env map[string]string, args ...string) (string, int) {
 	t.Helper()
 	t.Setenv("MEETSTREAM_CONFIG_DIR", t.TempDir())
 	t.Setenv("MEETSTREAM_API_KEY", "")
+	isolateAgentLookup(t)
 	for k, v := range env {
 		t.Setenv(k, v)
 	}
@@ -86,21 +88,36 @@ func TestEveryCommandAcceptsGlobalFlags(t *testing.T) {
 	}
 }
 
-// TestHomeView renders the home screen; MEETSTREAM_DUMP_HOME=<file> also writes
+// TestHomeView renders the home app; MEETSTREAM_DUMP_HOME=<file> also writes
 // it with colour, for screenshots (scripts/screenshot.sh).
 func TestHomeView(t *testing.T) {
 	if os.Getenv("MEETSTREAM_DUMP_HOME") != "" {
 		lipgloss.SetColorProfile(termenv.TrueColor)
 	}
-	m := homeModel{version: "0.1.0", signedIn: "Signed in · key ms_…a1b2 (~/.meetstream)", cursor: 2}
+	t.Setenv("MEETSTREAM_CONFIG_DIR", t.TempDir())
+	t.Setenv("MEETSTREAM_API_KEY", "")
+	t.Setenv("MEETSTREAM_API_URL", "")
+	isolateAgentLookup(t)
+	m := newHomeModel(&homeEnv{version: "0.1.0"})
+	m.width, m.height = 120, 36
 	v := m.View()
-	for _, want := range []string{"MeetStream", "Send a bot to a meeting", "coming in M4", "enter choose"} {
+	for _, want := range []string{"MeetStream", "Not signed in", "GET STARTED", "Sign in", "Bring an AI agent into my meetings", "MEETINGS", "Send a bot to a meeting", "Connect my calendar", "ACCOUNT & HELP", "Check my setup", "enter choose"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("home view missing %q", want)
 		}
 	}
+	for _, bad := range []string{"Set up MIA", "coming in"} {
+		if strings.Contains(v, bad) {
+			t.Errorf("home view still shows %q:\n%s", bad, v)
+		}
+	}
 	if p := os.Getenv("MEETSTREAM_DUMP_HOME"); p != "" {
-		if err := os.WriteFile(p, []byte(v), 0o644); err != nil {
+		t.Setenv("MEETSTREAM_API_KEY", "ms_demo_key_a1b2")
+		t.Setenv("MEETSTREAM_AGENT_KIT_HOME", t.TempDir())
+		_ = kitconfig.Setup{Agent: "claude", Workdir: "/tmp/meetings", Tunnel: "relay"}.Save("")
+		m := newHomeModel(&homeEnv{version: "0.1.0"})
+		m.width, m.height, m.cursor = 120, 36, 3
+		if err := os.WriteFile(p, []byte(m.View()), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
