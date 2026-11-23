@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -28,6 +29,11 @@ func run(t *testing.T, env map[string]string, args ...string) (string, int) {
 	r, w, _ := os.Pipe()
 	old := os.Stdout
 	os.Stdout = w
+	// Read while the command runs: a pipe holds only so much (a few KB on
+	// Windows), and a writer with no reader blocks forever.
+	var buf bytes.Buffer
+	read := make(chan struct{})
+	go func() { _, _ = io.Copy(&buf, r); close(read) }()
 	root := NewRoot(BuildInfo{Version: "1.2.3", Commit: "abc", Date: "today"})
 	root.SetArgs(args)
 	code := 0
@@ -39,8 +45,8 @@ func run(t *testing.T, env map[string]string, args ...string) (string, int) {
 	}
 	w.Close()
 	os.Stdout = old
-	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
+	<-read
+	r.Close()
 	return buf.String(), code
 }
 
@@ -147,7 +153,8 @@ func TestLoginWithKeyFromStdinStoresMaskedKey(t *testing.T) {
 	if !strings.Contains(string(b), "ms_piped_key_9876") {
 		t.Fatal("key not stored")
 	}
-	if fi, _ := os.Stat(dir + "/config.json"); fi.Mode().Perm() != 0o600 {
+	// 0600 is a Unix mode; Windows reports 0666 for any writable file (its ACLs keep the profile private).
+	if fi, _ := os.Stat(dir + "/config.json"); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("config mode %v", fi.Mode().Perm())
 	}
 }
@@ -186,11 +193,7 @@ func TestAgentSetupDryRun(t *testing.T) {
 	if err := os.WriteFile(home+"/credentials.json", []byte(`{"device_id":"dev_test1","refresh_token":"rt","auth_url":"http://a.invalid","relay_url":"wss://r.invalid/v1/connect"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bin := t.TempDir()
-	if err := os.WriteFile(bin+"/claude", []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
+	t.Setenv("PATH", fakeBin(t, "claude"))
 	out, code := run(t, nil, "agent", "setup", "--agent", "claude", "--access", "confirm", "--dry-run", "--json", "--no-input")
 	var m struct {
 		DryRun bool `json:"dry_run"`

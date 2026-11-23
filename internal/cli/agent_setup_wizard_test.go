@@ -5,12 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
+	"github.com/meetstream-ai/cli/internal/testutil/fakecli"
 	"github.com/meetstream-ai/cli/internal/ui"
 )
 
@@ -87,29 +89,45 @@ func TestSetupMissingAgentNonInteractiveHintsAndExits2(t *testing.T) {
 // installed on the test machine (~/.local/bin, Homebrew) is never found.
 func isolateAgentLookup(t *testing.T) {
 	t.Helper()
-	if os.Getenv("HOME") == "" || !strings.HasPrefix(os.Getenv("HOME"), os.TempDir()) {
-		t.Setenv("HOME", t.TempDir())
+	if home, _ := os.UserHomeDir(); home == "" || !strings.HasPrefix(home, os.TempDir()) {
+		setHome(t, t.TempDir())
 	}
 	old := systemInstallDirs
 	systemInstallDirs = nil
 	t.Cleanup(func() { systemInstallDirs = old })
 }
 
-// fakeBin writes executable stubs into a fresh folder.
+// setHome makes dir the user's home for this test: HOME, and USERPROFILE,
+// which is what os.UserHomeDir reads on Windows.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
+// fakeBin writes stand-in programs (exit 0, no output) into a fresh folder:
+// claude, or claude.exe on Windows, so PATH lookups find them everywhere.
 func fakeBin(t *testing.T, names ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for _, n := range names {
-		if err := os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		fakecli.Program(t, dir, n)
 	}
 	return dir
 }
 
+// wantPathHint is the start of the line that puts dir on PATH: an export for
+// the shell profile, or on Windows a PowerShell line for the user's Path.
+func wantPathHint(dir string) string {
+	if runtime.GOOS == "windows" {
+		return `[Environment]::SetEnvironmentVariable("Path", "` + dir + `;"`
+	}
+	return `export PATH="` + dir + `:$PATH"`
+}
+
 func withInstallDirs(t *testing.T, home string) {
 	t.Helper()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	old := systemInstallDirs
 	systemInstallDirs = nil
 	t.Cleanup(func() { systemInstallDirs = old })
@@ -125,13 +143,11 @@ func TestInstallFindsMuseLauncherOffPath(t *testing.T) {
 	var ran [][]string
 	in := installer{in: strings.NewReader("y\nn\n"), run: func(stages [][]string) int {
 		ran = append(ran, stages...)
-		dir := filepath.Join(home, ".local", "bin")
-		_ = os.MkdirAll(dir, 0o755)
-		_ = os.WriteFile(filepath.Join(dir, "muse"), []byte("#!/bin/sh\n"), 0o755)
+		fakecli.Program(t, filepath.Join(home, ".local", "bin"), "muse")
 		return 0
 	}}
 	got := in.offer(agents.All["muse"])
-	want := filepath.Join(home, ".local", "bin", "muse")
+	want := filepath.Join(home, ".local", "bin", fakecli.Name("muse"))
 	if got != want {
 		t.Fatalf("got %q want %q\n%s", got, want, out)
 	}
@@ -139,7 +155,7 @@ func TestInstallFindsMuseLauncherOffPath(t *testing.T) {
 		t.Fatalf("ran %v", ran)
 	}
 	s := out.String()
-	for _, w := range []string{"curl -fsSL https://dev.meta.ai/install.sh | bash", `export PATH="` + filepath.Dir(want) + `:$PATH"`, "not on your PATH", "Sign in and set it up now (muse)?"} {
+	for _, w := range []string{"curl -fsSL https://dev.meta.ai/install.sh | bash", wantPathHint(filepath.Dir(want)), "not on your PATH", "Sign in and set it up now (muse)?"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("missing %q in\n%s", w, s)
 		}

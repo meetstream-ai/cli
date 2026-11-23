@@ -121,10 +121,7 @@ func newAgentServeCmd(info BuildInfo) *cobra.Command {
 	f.StringVar(&o.command, "command", "", "custom command; {prompt} is replaced, otherwise stdin")
 	f.StringVar(&o.binary, "binary", "", "path to the agent CLI")
 	f.StringVar(&o.workdir, "workdir", cwd, "folder the agent works in")
-	owner := os.Getenv("USER")
-	if owner == "" {
-		owner = "the user"
-	}
+	owner := setupOwner()
 	f.StringVar(&o.owner, "owner", owner, "your name as MIA hears it")
 	f.Float64Var(&o.timeout, "timeout", 60, "stop a turn after this many seconds with no output")
 	f.StringVar(&o.model, "model", "", "agent model (MIA can override)")

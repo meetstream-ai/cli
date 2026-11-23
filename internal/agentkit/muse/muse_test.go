@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -56,11 +57,30 @@ func TestTheAppBesideTheLauncherDecides(t *testing.T) {
 }
 
 func TestANonExecutableAppIsNotInstalled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("execute bits are Unix-only: on Windows the app file itself is the app")
+	}
 	l := launcher(t, t.TempDir())
 	download(t, l)
 	_ = os.Chmod(filepath.Join(filepath.Dir(l), "muse-bin-"+version), 0o644)
 	if !LauncherWithoutApp("muse", l) {
 		t.Fatal("non-executable app counts as installed")
+	}
+}
+
+// Windows: no execute bits, and the app may carry .exe.
+func TestWindowsAppWithExeIsInstalled(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows file naming")
+	}
+	l := launcher(t, t.TempDir())
+	dir := filepath.Dir(l)
+	_ = os.WriteFile(filepath.Join(dir, ".muse-version"), []byte(version), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "muse-bin-"+version+".exe"), []byte("MZ"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if LauncherWithoutApp("muse", l) {
+		t.Fatal("muse-bin-<version>.exe not counted as the app")
 	}
 }
 

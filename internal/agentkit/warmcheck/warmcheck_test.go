@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/agents"
 	"github.com/meetstream-ai/cli/internal/agentkit/bridge"
 	"github.com/meetstream-ai/cli/internal/agentkit/config"
+	"github.com/meetstream-ai/cli/internal/testutil/fakecli"
 )
 
 // The ACP driver starts the meeting-tools shim as `<this binary> agent mcp-stdio
@@ -31,11 +31,8 @@ func TestMain(m *testing.M) {
 // stubConfig runs the kit's stub agent (no model, no network) as agent name.
 func stubConfig(t *testing.T, name string) config.Config {
 	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is needed for the stub agent")
-	}
-	stub, _ := filepath.Abs("../bridge/testdata/stub_agent.py")
 	dir := t.TempDir()
+	stub := fakecli.Python(t, dir, name, filepath.Join("..", "bridge", "testdata", "stub_agent.py"))
 	return config.Config{Agent: agents.All[name], Binary: stub, Workdir: dir, RuntimeDir: dir, Owner: "Nav", Timeout: 30 * time.Second}
 }
 

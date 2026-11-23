@@ -22,6 +22,7 @@ import (
 	kitconfig "github.com/meetstream-ai/cli/internal/agentkit/config"
 	agentlogin "github.com/meetstream-ai/cli/internal/agentkit/login"
 	"github.com/meetstream-ai/cli/internal/api"
+	"github.com/meetstream-ai/cli/internal/testutil/fakecli"
 )
 
 // Signed out at startup: the sign-in check notifies on serve's own goroutine
@@ -60,14 +61,15 @@ func TestServeSignedOutNoticeBeforeHeader(t *testing.T) {
 // secrets hidden; the home app's background bridge logs only who spoke; and
 // agent errors are redacted too.
 func TestServeTurnLineRedactedAndHidden(t *testing.T) {
-	spec, err := agents.Custom("/bin/echo ready")
+	echo := fakecli.Echo(t, t.TempDir(), "echo")
+	spec, err := agents.Custom("'" + echo + "' ready")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, hide := range []bool{false, true} {
 		var mu sync.Mutex
 		var lines []string
-		c := kitconfig.Config{Agent: spec, Binary: "/bin/echo", Workdir: t.TempDir(), RuntimeDir: t.TempDir(), HideTurnText: hide,
+		c := kitconfig.Config{Agent: spec, Binary: echo, Workdir: t.TempDir(), RuntimeDir: t.TempDir(), HideTurnText: hide,
 			Log: func(l string) { mu.Lock(); lines = append(lines, l); mu.Unlock() }}
 		srv := bridge.New(c)
 		srv.SetInternalToken("tok")

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -19,6 +18,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/bridge"
 	"github.com/meetstream-ai/cli/internal/agentkit/config"
 	"github.com/meetstream-ai/cli/internal/agentkit/relay"
+	"github.com/meetstream-ai/cli/internal/testutil/fakecli"
 )
 
 type frame = map[string]any
@@ -36,6 +36,11 @@ func readFrame(t *testing.T, ctx context.Context, c *websocket.Conn) frame {
 	return f
 }
 
+func parsedBody(f frame) map[string]any {
+	b, _ := f["body"].(map[string]any)
+	return b
+}
+
 func writeFrame(t *testing.T, ctx context.Context, c *websocket.Conn, f frame) {
 	t.Helper()
 	f["v"] = 1
@@ -48,10 +53,7 @@ func writeFrame(t *testing.T, ctx context.Context, c *websocket.Conn, f frame) {
 // A fake relay drives the real bridge (with the kit's stub agent) through
 // the client, as MIA would through the real relay (PROTOCOL.md §2).
 func TestRelayEndToEnd(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is needed for the stub agent")
-	}
-	stub, _ := filepath.Abs("../bridge/testdata/stub_agent.py")
+	stub := fakecli.Python(t, t.TempDir(), "claude", filepath.Join("..", "bridge", "testdata", "stub_agent.py"))
 	dir := t.TempDir()
 	br := bridge.New(config.Config{Agent: agents.All["claude"], Binary: stub, Workdir: dir, RuntimeDir: dir, Owner: "Nav", Timeout: 20 * time.Second})
 	t.Cleanup(br.Close)
@@ -90,7 +92,8 @@ func TestRelayEndToEnd(t *testing.T) {
 		}
 		// Session, then a streamed turn.
 		writeFrame(t, ctx, c, frame{"t": "req", "s": 3, "method": "POST", "path": "/v1/session/start", "body": map[string]any{"session_id": "bot_r"}})
-		if res := readFrame(t, ctx, c); res["status"] != 200.0 {
+		// login "ok": the stub agent ran, so the turn below has a session.
+		if res := readFrame(t, ctx, c); res["status"] != 200.0 || parsedBody(res)["login"] != "ok" {
 			t.Errorf("session/start %v", res)
 		}
 		writeFrame(t, ctx, c, frame{"t": "req", "s": 4, "method": "POST", "path": "/v1/turn",

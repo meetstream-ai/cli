@@ -61,3 +61,23 @@ func TestLoginArgv(t *testing.T) {
 		}
 	}
 }
+
+// A backslash escapes on Unix, but on Windows it is the path separator: a
+// custom command's path keeps it, and only \" still escapes a quote.
+func TestSplitCommandBackslashes(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		windows bool
+		want    []string
+	}{
+		{`a\ b "c d" 'e\f'`, false, []string{"a b", "c d", `e\f`}},
+		{`C:\tools\agent.exe --x {prompt}`, true, []string{`C:\tools\agent.exe`, "--x", "{prompt}"}},
+		{`"C:\Program Files\agent.exe" say \"hi\"`, true, []string{`C:\Program Files\agent.exe`, "say", `"hi"`}},
+		{`C:\tools\`, true, []string{`C:\tools\`}},
+	} {
+		got, err := splitCommand(tc.in, tc.windows)
+		if err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%q (windows=%v) = %q %v, want %q", tc.in, tc.windows, got, err, tc.want)
+		}
+	}
+}

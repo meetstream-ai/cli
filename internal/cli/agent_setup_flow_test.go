@@ -27,6 +27,7 @@ import (
 	"github.com/meetstream-ai/cli/internal/agentkit/models"
 	"github.com/meetstream-ai/cli/internal/agentkit/usage"
 	"github.com/meetstream-ai/cli/internal/agentkit/warmcheck"
+	"github.com/meetstream-ai/cli/internal/testutil/fakecli"
 	"github.com/meetstream-ai/cli/internal/ui"
 )
 
@@ -210,7 +211,7 @@ func TestEveryStepGoesBackWithoutCrashing(t *testing.T) {
 		t.Fatalf("created %+v", created)
 	}
 	for _, want := range []string{"1/11", "2/11", "7/11", "11/11", "2 models from test", "Model: m1", "isn't available on this server yet", "meetstream calendar connect",
-		"Created ~/MeetStream Agent", "Meeting context: meeting only", "edit with: meetstream agent context edit", "Access: Meeting only",
+		filepath.FromSlash("Created ~/MeetStream Agent"), "Meeting context: meeting only", "edit with: meetstream agent context edit", "Access: Meeting only",
 		"Woke Antigravity CLI", "First words", "Answered", "Antigravity CLI answered in 1.2 s: ready", "Warm mode (ACP) ready · meeting tools work (test tool called) (",
 		"warm session per meeting"} {
 		if !strings.Contains(out, want) {
@@ -239,7 +240,8 @@ func withStderr(t *testing.T, f func()) string {
 	}
 	old := os.Stderr
 	os.Stderr = file
-	defer func() { os.Stderr = old }()
+	// Closed even when f stops the test (t.Fatal): Windows cannot remove an open file.
+	defer func() { os.Stderr = old; _ = file.Close() }()
 	f()
 	_ = file.Close()
 	b, _ := os.ReadFile(file.Name())
@@ -260,6 +262,7 @@ func keysFor(t *testing.T, script ...[]string) func(tea.Model) (tea.Model, error
 }
 
 func testWizard() *setupWizard {
+	g = globals{} // an earlier run's --json must not silence this wizard's output
 	c := &cobra.Command{}
 	c.SetContext(context.Background())
 	return &setupWizard{cmd: c}
@@ -329,7 +332,7 @@ func TestAutoOnlyShortcutIsOnlyForAuto(t *testing.T) {
 // test_measure_live_is_not_offered_when_the_cli_cannot_report_usage, and the
 // cost columns of the rows.
 func TestModelMenuRows(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	menu, _, _ := modelMenu(agents.All["copilot"], twoModels(), "", nil)
 	v := menu.View()
 	if strings.Contains(v, measureLabel) || !strings.Contains(v, "usage n/a") || !strings.Contains(v, "plan") {
@@ -357,7 +360,7 @@ func estimatesUsage(in, out int64) usage.Usage { return usage.Usage{Input: in, O
 func TestMeasureLiveRunsTickedModels(t *testing.T) {
 	out := captureUI(t)
 	t.Setenv("MEETSTREAM_AGENT_KIT_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	setupFakes(t, twoModels())
 	swap(t, &benchExec, fakeClaudeExec(nil))
 	swap(t, &runBenchLive, func(ctx context.Context, q *bench.Queue) ([]bench.Job, bool) { return q.Run(ctx), false })
@@ -431,23 +434,18 @@ func TestSetupNonInteractiveModelAndEffort(t *testing.T) {
 // export line, and its path is what serve uses.
 func TestDetectFindsAgentOffPath(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	swap(t, &systemInstallDirs, nil)
 	t.Setenv("PATH", t.TempDir())
 	local := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(local, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(local, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	installed := fakecli.Program(t, local, "claude")
 	var claude agentChoice
 	for _, c := range detectAgents() {
 		if c.name == "claude" {
 			claude = c
 		}
 	}
-	if !claude.installed || !claude.offPath || claude.binary != filepath.Join(local, "claude") {
+	if !claude.installed || !claude.offPath || claude.binary != installed {
 		t.Fatalf("%+v", claude)
 	}
 	if v := (pickModel{items: []agentChoice{claude}}).View(); !strings.Contains(v, "not on PATH") {
@@ -456,11 +454,11 @@ func TestDetectFindsAgentOffPath(t *testing.T) {
 	out := captureUI(t)
 	g = globals{}
 	pathHint(claude)
-	if !strings.Contains(out.String(), `export PATH="`+local+`:$PATH"`) {
+	if !strings.Contains(out.String(), wantPathHint(local)) {
 		t.Fatal(out.String())
 	}
 	c, err := agentServeOptions{agent: "claude", workdir: t.TempDir(), maxAccess: "readonly", timeout: 60}.build()
-	if err != nil || c.Binary != filepath.Join(local, "claude") {
+	if err != nil || c.Binary != installed {
 		t.Fatalf("%v %v", c.Binary, err)
 	}
 }
@@ -552,7 +550,7 @@ func TestSetupModelView(t *testing.T) {
 		lipgloss.SetColorProfile(termenv.TrueColor)
 	}
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("MEETSTREAM_AGENT_KIT_HOME", t.TempDir())
 	_ = os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"oauthAccount":{}}`), 0o600) // signed in on a plan
 	listed := models.Catalog{Models: []models.Choice{{ID: "sonnet"}, {ID: "opus"}, {ID: "haiku"}, {ID: "fable"}},

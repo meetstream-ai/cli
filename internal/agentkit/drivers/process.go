@@ -227,7 +227,10 @@ func RunOnce(ctx context.Context, c config.Config, prompt, access, model string,
 	argv, input := OneShotArgs(c.Agent, c.Binary, prompt, access, model, c.Effort, c.IgnoreRules)
 	p, spawnMS, err := spawn(argv, c.Workdir, Env(c, model, ""))
 	if err != nil {
+		// "end" too: the turn waits for it, and without it a CLI that
+		// cannot start looked like a slow one until the turn timed out.
 		emit(Event{Kind: "error", Text: err.Error()})
+		emit(Event{Kind: "end"})
 		return 0
 	}
 	defer p.close()
