@@ -729,9 +729,10 @@ func (w *setupWizard) stepMIA() (bool, menuResult, error) {
 }
 
 // calendarChoices are the calendar step's rows: provider id, label and detail line.
+// Microsoft is left out until its sign-in app is live (calendar connect
+// --provider microsoft still reaches it).
 var calendarChoices = []struct{ id, label, detail string }{
 	{"google", "Google", "Sign in with Google in your browser; MIA joins meetings you host or accepted."},
-	{"microsoft", "Microsoft", "Sign in with Microsoft in your browser; MIA joins meetings you host or accepted."},
 	{"", "Skip", "Connect later with: meetstream calendar connect"},
 }
 

@@ -490,12 +490,18 @@ func TestCalendarStep(t *testing.T) {
 	captureUI(t)
 	w := testWizard()
 	w.interactive = true
-	useDriver(t, keysFor(t, []string{"down", "down", "enter"}))
+	// Rows: Google, Skip (Microsoft stays out of the menu until its sign-in app is live).
+	for _, c := range calendarChoices {
+		if c.id == "microsoft" {
+			t.Fatal("Microsoft is offered in the calendar step")
+		}
+	}
+	useDriver(t, keysFor(t, []string{"down", "enter"}))
 	if asked, res, err := w.stepCalendar(); !asked || res != menuChosen || err != nil || w.calendar != "" {
 		t.Fatalf("skip: %v %v %v %q", asked, res, err, w.calendar)
 	}
-	useDriver(t, keysFor(t, []string{"down", "enter"}))
-	if _, _, _ = w.stepCalendar(); w.calendar != "microsoft" {
+	useDriver(t, keysFor(t, []string{"enter"}))
+	if _, _, _ = w.stepCalendar(); w.calendar != "google" {
 		t.Fatalf("%q", w.calendar)
 	}
 	w.noCalendar = true
