@@ -1,5 +1,5 @@
 """Small MeetStream API helpers (standard library only)."""
-import json, os, re, time, urllib.error, urllib.parse, urllib.request
+import json, os, re, subprocess, time, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
 
@@ -13,10 +13,14 @@ def load_env():
                 os.environ.setdefault(k.strip(), v.strip())
 
 
+# The API URL from your shell, before .env is read: the CLI keeps using it, so a
+# project file cannot send your sign-in to another host.
+SHELL_API_URL = os.environ.get("MEETSTREAM_API_URL")
 load_env()
 API = os.environ.get("MEETSTREAM_API_URL", "https://api.meetstream.ai/api/v1").rstrip("/")
 KEY = os.environ.get("MEETSTREAM_API_KEY", "")
-POLL = 1 if ("127.0.0.1" in API or "localhost" in API) else 5
+_target = API if KEY else (SHELL_API_URL or "")
+POLL = 1 if ("127.0.0.1" in _target or "localhost" in _target) else 5
 
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -29,8 +33,37 @@ def safe_id(value):
     return urllib.parse.quote(value, safe="")
 
 
+def _call_via_cli(method, path, body):
+    """No key in .env (your laptop): the meetstream CLI makes the call with your sign-in."""
+    env = dict(os.environ)
+    if SHELL_API_URL:
+        env["MEETSTREAM_API_URL"] = SHELL_API_URL
+    else:
+        env.pop("MEETSTREAM_API_URL", None)
+    args = ["meetstream", "api", path, "-X", method, "--envelope", "--no-input"]
+    if body is not None:
+        args += ["-d", "-"]
+    try:
+        r = subprocess.run(args, input=json.dumps(body) if body is not None else None,
+                           capture_output=True, text=True, env=env, timeout=60)
+    except FileNotFoundError:
+        raise RuntimeError("no MeetStream key in .env and the meetstream CLI is not installed "
+                           "(install it, or run: meetstream env --with-key)") from None
+    if r.returncode != 0:
+        raise RuntimeError("meetstream api failed: " + (r.stdout or r.stderr).strip()[:300] +
+                           " (signed in? run: meetstream login)")
+    out = json.loads(r.stdout)
+    return out["status"], out["body"]
+
+
 def call(method, path, body=None):
-    """One MeetStream API call. Returns (status, json)."""
+    """One MeetStream API call. Returns (status, json).
+
+    With MEETSTREAM_API_KEY in .env (a server) it calls the API directly.
+    Without it (your laptop) it goes through the CLI and your sign-in.
+    """
+    if not KEY:
+        return _call_via_cli(method, path, body)
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(API + path, data=data, method=method, headers={
         "Authorization": f"Token {KEY}", "Content-Type": "application/json"})

@@ -192,7 +192,7 @@ func askInit(c *initChoices) error {
 
 func newInitCmd() *cobra.Command {
 	var c initChoices
-	var list, yes, force, noEnv bool
+	var list, yes, force, noEnv, withKey bool
 	cmd := &cobra.Command{
 		Use: "init [use-case]", Short: "Start a project from a template: notetaker, send-a-bot, live captions, webhooks", GroupID: "start",
 		Args: cobra.MaximumNArgs(1),
@@ -249,7 +249,7 @@ an AGENTS.md for coding agents, and prints the next commands.`,
 			}
 			rep := envReport{}
 			if !noEnv {
-				rep, err = syncEnv(c.Dir, true, false)
+				rep, err = syncEnv(c.Dir, true, false, withKey)
 				if err != nil {
 					return err
 				}
@@ -258,12 +258,15 @@ an AGENTS.md for coding agents, and prints the next commands.`,
 			abs, _ := filepath.Abs(c.Dir)
 			return emit(map[string]any{"use_case": u.ID, "lang": c.Lang, "dir": c.Dir, "path": abs, "template_version": cmd.Root().Version,
 				"options": map[string]string{"transcription": c.Transcription, "live_transcription": c.Live, "llm": c.LLM, "email": c.Email},
-				"files":   plan.Paths(), "env": map[string]any{"filled": rep.Filled, "missing": rep.Missing}, "next": next}, func() {
+				"files":   plan.Paths(), "env": map[string]any{"meetstream_auth": rep.Mode, "filled": rep.Filled, "missing": rep.Missing}, "next": next}, func() {
 				fmt.Fprintln(ui.Out)
 				ui.OK(fmt.Sprintf("Template %s (%s) → %s", u.ID, langLabels[c.Lang], c.Dir))
 				ui.OK(fmt.Sprintf("%d files, including AGENTS.md for coding agents", len(plan.Files)))
 				if !noEnv {
-					msg := ".env written: MeetStream key filled from your profile"
+					msg := ".env written: no MeetStream key in it (the app uses your CLI sign-in)"
+					if rep.Mode == "key" {
+						msg = ".env written: MeetStream key and API URL from your profile"
+					}
 					if len(rep.Missing) > 0 {
 						msg += ui.DimStyle.Render(fmt.Sprintf("  (%d key(s) still empty: %s)", len(rep.Missing), strings.Join(rep.Missing, ", ")))
 					}
@@ -288,6 +291,7 @@ an AGENTS.md for coding agents, and prints the next commands.`,
 	f.BoolVarP(&yes, "yes", "y", false, "take the recommended defaults; ask nothing")
 	f.BoolVar(&force, "force", false, "write into a non-empty folder (overwrites only the template's files)")
 	f.BoolVar(&noEnv, "no-env", false, "do not write .env")
+	f.BoolVar(&withKey, "with-key", false, "put your MeetStream key in .env (for servers; default: the app uses your CLI sign-in)")
 	f.BoolVar(&list, "list", false, "list the templates")
 	return cmd
 }

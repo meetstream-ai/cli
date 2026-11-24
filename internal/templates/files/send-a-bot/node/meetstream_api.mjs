@@ -1,4 +1,9 @@
 import { readFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+
+// The API URL from your shell, before .env is read: the CLI keeps using it, so a
+// project file cannot send your sign-in to another host.
+const SHELL_API_URL = process.env.MEETSTREAM_API_URL;
 
 // Read .env next to this file (no packages needed).
 const envFile = new URL("./.env", import.meta.url);
@@ -14,7 +19,21 @@ if (existsSync(envFile)) {
 
 export const API = (process.env.MEETSTREAM_API_URL || "https://api.meetstream.ai/api/v1").replace(/\/$/, "");
 const KEY = process.env.MEETSTREAM_API_KEY || "";
-export const POLL_MS = /127\.0\.0\.1|localhost/.test(API) ? 1000 : 5000;
+export const POLL_MS = /127\.0\.0\.1|localhost/.test(KEY ? API : SHELL_API_URL || "") ? 1000 : 5000;
+
+// No key in .env (your laptop): the meetstream CLI makes the call with your sign-in.
+function callViaCli(method, path, body) {
+  const env = { ...process.env };
+  if (SHELL_API_URL) env.MEETSTREAM_API_URL = SHELL_API_URL;
+  else delete env.MEETSTREAM_API_URL;
+  const args = ["api", path, "-X", method, "--envelope", "--no-input"];
+  if (body !== undefined) args.push("-d", "-");
+  const r = spawnSync("meetstream", args, { input: body === undefined ? undefined : JSON.stringify(body), env, encoding: "utf8", timeout: 60000 });
+  if (r.error) throw new Error("no MeetStream key in .env and the meetstream CLI is not installed (install it, or run: meetstream env --with-key)");
+  if (r.status !== 0) throw new Error(`meetstream api failed: ${(r.stdout || r.stderr).trim().slice(0, 300)} (signed in? run: meetstream login)`);
+  const out = JSON.parse(r.stdout);
+  return [out.status, out.body];
+}
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Check an id from a webhook or an API answer before it goes into a URL path.
@@ -23,7 +42,10 @@ export function safeId(value) {
   return encodeURIComponent(value);
 }
 
+// With MEETSTREAM_API_KEY in .env (a server) this calls the API directly;
+// without it (your laptop) it goes through the CLI and your sign-in.
 export async function call(method, path, body) {
+  if (!KEY) return callViaCli(method, path, body);
   const res = await fetch(API + path, {
     method,
     headers: { Authorization: `Token ${KEY}`, "Content-Type": "application/json" },

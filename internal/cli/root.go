@@ -101,7 +101,7 @@ Docs: https://docs.meetstream.ai   Keys: https://app.meetstream.ai/api-keys`,
 		newLoginCmd(info), newAuthCmd(info), newInitCmd(), newEnvCmd(),
 		newJoinCmd(), newTranscriptionCmd(), newBotsCmd(), newLegacyBotCmd(), newTranscriptionsCmd(), newTranscribeCmd(), newTranscriptCmd(), newRecordingsCmd(), newBalanceCmd(), newMiaCmd(),
 		newAgentCmd(info), newSetupShortcut(info), newBridgeCmd(info),
-		newLoginsCmd(), newCalendarCmd(), newListenCmd(), newTriggerCmd(), newMockCmd(), newMCPCmd(), newAICmd(), newCommandsCmd(),
+		newLoginsCmd(), newCalendarCmd(), newListenCmd(), newTriggerCmd(), newMockCmd(), newMCPCmd(), newAICmd(), newCommandsCmd(), newAPICmd(),
 		newDoctorCmd(info), newDocsCmd(), newSkillCmd(), newVersionCmd(info),
 	)
 	root.SetHelpCommandGroupID("tool")

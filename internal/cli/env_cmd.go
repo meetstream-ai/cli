@@ -65,7 +65,10 @@ func meetstreamValues() map[string]string {
 }
 
 type envReport struct {
-	Path    string   `json:"path"`
+	Path string `json:"path"`
+	// Mode is "cli-sign-in" (the app calls MeetStream through the CLI, no key in
+	// the file) or "key" (the key and API URL are in .env, for servers).
+	Mode    string   `json:"meetstream_auth"`
 	Set     []string `json:"set"`
 	Filled  []string `json:"filled"`
 	Missing []string `json:"missing"`
@@ -74,7 +77,7 @@ type envReport struct {
 // syncEnv merges .env.example into .env: existing .env values stay, MeetStream
 // values are filled from the profile (replaced only with overwrite), example
 // defaults are copied, and empty keys are reported. It never prints a value.
-func syncEnv(dir string, write, overwrite bool) (envReport, error) {
+func syncEnv(dir string, write, overwrite, withKey bool) (envReport, error) {
 	example, _, err := readEnvFile(filepath.Join(dir, ".env.example"))
 	if err != nil {
 		return envReport{}, usageErr("no .env.example in "+dir, "run it in a project made by meetstream init, or pass --dir")
@@ -91,7 +94,13 @@ func syncEnv(dir string, write, overwrite bool) (envReport, error) {
 	for _, l := range existing {
 		current[l.Key] = l.Value
 	}
-	fill := meetstreamValues()
+	fill := map[string]string{}
+	if withKey {
+		fill = meetstreamValues()
+		if fill["MEETSTREAM_API_KEY"] == "" {
+			return envReport{}, usageErr("not signed in, so there is no key to write", "run: meetstream login")
+		}
+	}
 	// The key and the URL it is sent to travel together: when the CLI writes the
 	// key, it also writes the profile's API URL, so a project file cannot point
 	// the key at another host.
@@ -100,7 +109,10 @@ func syncEnv(dir string, write, overwrite bool) (envReport, error) {
 		fmt.Fprintln(os.Stderr, "⚠ .env had a different MEETSTREAM_API_URL; replaced with your profile's URL because the key is written with it.")
 		current["MEETSTREAM_API_URL"] = ""
 	}
-	rep := envReport{Path: envPath, Set: []string{}, Filled: []string{}, Missing: []string{}}
+	rep := envReport{Path: envPath, Mode: "cli-sign-in", Set: []string{}, Filled: []string{}, Missing: []string{}}
+	if withKey || current["MEETSTREAM_API_KEY"] != "" {
+		rep.Mode = "key"
+	}
 	var out []envLine
 	for _, l := range example {
 		val, had := current[l.Key]
@@ -113,6 +125,9 @@ func syncEnv(dir string, write, overwrite bool) (envReport, error) {
 		case !had || val == "":
 			val = l.Value
 		}
+		if val == "" && !withKey && (l.Key == "MEETSTREAM_API_KEY" || l.Key == "MEETSTREAM_API_URL") {
+			continue // the app uses your CLI sign-in; nothing to fill
+		}
 		if val == "" {
 			rep.Missing = append(rep.Missing, l.Key)
 		} else {
@@ -123,6 +138,15 @@ func syncEnv(dir string, write, overwrite bool) (envReport, error) {
 	urlListed := false
 	for _, l := range out {
 		urlListed = urlListed || strings.EqualFold(l.Key, "MEETSTREAM_API_URL")
+	}
+	keyListed := false
+	for _, l := range out {
+		keyListed = keyListed || l.Key == "MEETSTREAM_API_KEY"
+	}
+	if keyWritten && !keyListed {
+		out = append(out, envLine{"MEETSTREAM_API_KEY", fill["MEETSTREAM_API_KEY"]})
+		rep.Filled = append(rep.Filled, "MEETSTREAM_API_KEY")
+		rep.Set = append(rep.Set, "MEETSTREAM_API_KEY")
 	}
 	if keyWritten && !urlListed {
 		rep.Filled = append(rep.Filled, "MEETSTREAM_API_URL")
@@ -180,21 +204,27 @@ func renderEnvReport(rep envReport) {
 
 func newEnvCmd() *cobra.Command {
 	var dir string
-	var check, overwrite bool
+	var check, overwrite, withKey bool
 	cmd := &cobra.Command{
 		Use: "env", Short: "Fill .env from .env.example and list the keys still empty", GroupID: "start", Args: cobra.NoArgs,
 		Long: `Fill .env in a project from its .env.example.
 
-MeetStream values (API key, API URL) come from your signed-in profile. Keys
-for other services (model, email) are listed so you can add them. Values are
-never printed. --check only reports and exits 3 when a key is empty.`,
+On your laptop no MeetStream key goes into the file: apps made by init call
+MeetStream through the CLI ("meetstream api"), with your sign-in. For a
+server, --with-key writes your key and the API URL it belongs to.
+
+Keys for other services (model, email) are listed so you can add them. Values
+are never printed. --check only reports and exits 3 when a key is empty.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			rep, err := syncEnv(dir, !check, overwrite)
+			rep, err := syncEnv(dir, !check, overwrite, withKey)
 			if err != nil {
 				return err
 			}
 			if err := emit(rep, func() {
 				renderEnvReport(rep)
+				if rep.Mode == "cli-sign-in" {
+					ui.Note("MeetStream: no key in .env; the app uses your CLI sign-in. For a server: meetstream env --with-key")
+				}
 				if !check {
 					ui.Note("Wrote " + rep.Path + " (mode 0600; .gitignore keeps it out of git).")
 				}
@@ -211,6 +241,7 @@ never printed. --check only reports and exits 3 when a key is empty.`,
 	f.StringVar(&dir, "dir", ".", "project folder")
 	f.BoolVar(&check, "check", false, "only report; exit 3 if a key is empty")
 	f.BoolVar(&overwrite, "overwrite", false, "replace MeetStream values that are already set")
+	f.BoolVar(&withKey, "with-key", false, "write your MeetStream key and API URL into .env (for servers; on a laptop the app uses your CLI sign-in)")
 	return cmd
 }
 

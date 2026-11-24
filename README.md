@@ -93,8 +93,9 @@ and set `MEETSTREAM_API_KEY`.
 | `join <url>` | Sends a bot to a meeting (all `create_bot` options) | ✅ |
 | `bots list/status/get/timeline/remove/delete/say/show-image/hand` | Manages your bots (old `bot …` names still work) | ✅ |
 | `bots tail` | Planned: live bot events over the relay; exits 2 with a local receiver hint | planned |
-| `init` | Starts a project from a template (notetaker, send a bot, live captions, webhook receiver; Python or Node). Asks step by step in a terminal (Esc goes back); every question is also a flag (`--yes --no-input` for agents). Writes `.env` with your key filled in and an `AGENTS.md` | ✅ |
-| `env` | Fills `.env` from `.env.example` with your MeetStream values and lists the keys still empty (`--check`) | ✅ |
+| `init` | Starts a project from a template (notetaker, send a bot, live captions, webhook receiver; Python or Node). Asks step by step in a terminal (Esc goes back); every question is also a flag (`--yes --no-input` for agents). Writes `.env` (no MeetStream key on a laptop; `--with-key` for servers) and an `AGENTS.md` | ✅ |
+| `env` | Fills `.env` from `.env.example` and lists the keys still empty (`--check`). No MeetStream key goes in by default (apps use your CLI sign-in); `--with-key` adds it for a server | ✅ |
+| `api <path>` | One MeetStream API call with your sign-in (`-X`, `-d`, `--envelope`); the init apps use it on your laptop | ✅ |
 | `join --transcription` / `--live-transcription` / `--follow` | Choose the transcript after the call or live (`transcription providers` lists them); `--follow` prints each status change, then waits for the transcript | ✅ |
 | `listen` | Local webhook receiver; loopback by default, `--forward-to` your app, `--tunnel cloudflared\|ngrok\|https://…` for a public URL. While it runs, `join` sends bot events to it | ✅ |
 | `trigger <event>` | Sends a sample webhook (production envelope) to your app | ✅ |

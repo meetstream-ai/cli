@@ -20,3 +20,9 @@ meetstream join https://meet.google.com/abc-defg-hij --transcription [[.Transcri
 ```
 
 Zoom always needs setup: bots join Zoom through your own Zoom app, set up in MeetStream first.
+
+## On a server
+
+Your laptop needs no MeetStream key in `.env`: the app calls MeetStream through the `meetstream` CLI
+with your sign-in. A server has no CLI sign-in, so add the key there: `meetstream env --with-key`
+(or set `MEETSTREAM_API_KEY` in the server's environment). The same code then calls the API directly.

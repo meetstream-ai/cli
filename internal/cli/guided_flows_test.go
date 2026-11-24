@@ -161,8 +161,19 @@ func TestInitNonInteractiveWritesProject(t *testing.T) {
 		}
 	}
 	env2, _ := os.ReadFile(filepath.Join(dir, ".env"))
-	if !strings.Contains(string(env2), "MEETSTREAM_API_KEY=ms_secret_value") || !strings.Contains(string(env2), "OPENAI_MODEL=") || !strings.Contains(string(env2), "SMTP_HOST=") {
-		t.Fatalf(".env=%s", env2)
+	if strings.Contains(string(env2), "MEETSTREAM_API_KEY") || !strings.Contains(string(env2), "OPENAI_MODEL=") || !strings.Contains(string(env2), "SMTP_HOST=") {
+		t.Fatalf("default .env must hold no MeetStream key: %s", env2)
+	}
+	if res["env"].(map[string]any)["meetstream_auth"] != "cli-sign-in" {
+		t.Fatalf("env=%v", res["env"])
+	}
+	dir2 := filepath.Join(t.TempDir(), "nt2")
+	if out, code := run(t, env, "init", "notetaker", "--dir", dir2, "--yes", "--with-key", "--json"); code != 0 || strings.Contains(out, "ms_secret_value") {
+		t.Fatalf("--with-key: code=%d", code)
+	}
+	env3, _ := os.ReadFile(filepath.Join(dir2, ".env"))
+	if !strings.Contains(string(env3), "MEETSTREAM_API_KEY=ms_secret_value") || !strings.HasSuffix(strings.TrimSpace(string(env3)), "MEETSTREAM_API_URL=https://api.meetstream.ai/api/v1") {
+		t.Fatalf("--with-key .env=%s", env3)
 	}
 	if st, _ := os.Stat(filepath.Join(dir, ".env")); st != nil && st.Mode().Perm() != 0600 && os.PathSeparator == '/' {
 		t.Fatalf(".env mode %v", st.Mode().Perm())
@@ -209,7 +220,7 @@ func TestEnvCheckAndWrite(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(dir, ".env")); strings.Contains(string(b), "ms_k") {
 		t.Fatal("--check must not write")
 	}
-	if _, code := run(t, env, "env", "--dir", dir); code != 0 {
+	if _, code := run(t, env, "env", "--dir", dir, "--with-key"); code != 0 {
 		t.Fatalf("write: code=%d", code)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, ".env"))
@@ -346,7 +357,7 @@ func TestEnvKeyTravelsWithProfileURL(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("MEETSTREAM_API_KEY=\nMEETSTREAM_API_URL=https://api.meetstream.ai/api/v1\n"), 0644)
 	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("MEETSTREAM_API_URL=https://evil.example/collect\n"), 0600)
 	env := map[string]string{"MEETSTREAM_API_KEY": "ms_k", "MEETSTREAM_API_URL": "https://api.meetstream.ai/api/v1"}
-	if _, code := run(t, env, "env", "--dir", dir); code != 0 {
+	if _, code := run(t, env, "env", "--dir", dir, "--with-key"); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, ".env"))
@@ -363,7 +374,7 @@ func TestEnvRefusesSymlink(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("MEETSTREAM_API_KEY=\n"), 0644)
 	target := filepath.Join(t.TempDir(), "elsewhere")
 	_ = os.Symlink(target, filepath.Join(dir, ".env"))
-	if _, code := run(t, map[string]string{"MEETSTREAM_API_KEY": "ms_k"}, "env", "--dir", dir); code != 2 {
+	if _, code := run(t, map[string]string{"MEETSTREAM_API_KEY": "ms_k"}, "env", "--dir", dir, "--with-key"); code != 2 {
 		t.Fatalf("code=%d", code)
 	}
 	if _, err := os.Stat(target); err == nil {
@@ -387,7 +398,7 @@ func TestEnvURLForcedWhenExampleOmitsIt(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("MEETSTREAM_API_KEY=\n"), 0644)
 	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("export MEETSTREAM_API_URL=https://evil.example/collect?t=1\n"), 0600)
 	env := map[string]string{"MEETSTREAM_API_KEY": "ms_k", "MEETSTREAM_API_URL": "https://api.meetstream.ai/api/v1"}
-	out, errOut, code := runBoth(t, env, "env", "--dir", dir)
+	out, errOut, code := runBoth(t, env, "env", "--dir", dir, "--with-key")
 	if code != 0 {
 		t.Fatalf("code=%d", code)
 	}
@@ -405,12 +416,69 @@ func TestEnvLoaderVariantsCannotKeepAnotherURL(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("MEETSTREAM_API_KEY=\nexport\tMEETSTREAM_API_URL=https://evil.example/a\n"), 0644)
 	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("MEETSTREAM_API_URL: https://evil.example/b\nexport  meetstream_api_url=https://evil.example/c\nBAD KEY=https://evil.example/d\nKEEP_ME=1\n"), 0600)
 	env := map[string]string{"MEETSTREAM_API_KEY": "ms_k", "MEETSTREAM_API_URL": "https://api.meetstream.ai/api/v1"}
-	if _, code := run(t, env, "env", "--dir", dir); code != 0 {
+	if _, code := run(t, env, "env", "--dir", dir, "--with-key"); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, ".env"))
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	if strings.Contains(string(b), "evil.example") || lines[len(lines)-1] != "MEETSTREAM_API_URL=https://api.meetstream.ai/api/v1" || !strings.Contains(string(b), "KEEP_ME=1") {
 		t.Fatalf(".env=%s", b)
+	}
+}
+
+func TestEnvDefaultWritesNoKey(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("# hint\nPORT=8000\nRESEND_API_KEY=\n"), 0644)
+	out, code := run(t, map[string]string{"MEETSTREAM_API_KEY": "ms_k"}, "env", "--dir", dir, "--json")
+	if code != 0 || !strings.Contains(out, `"meetstream_auth": "cli-sign-in"`) {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, ".env")); strings.Contains(string(b), "MEETSTREAM") {
+		t.Fatalf("no MeetStream key or URL by default: %s", b)
+	}
+	if _, code := run(t, nil, "env", "--dir", dir, "--with-key"); code != 2 {
+		t.Fatalf("--with-key when not signed in: code=%d", code)
+	}
+}
+
+func TestAPICommand(t *testing.T) {
+	var gotAuth, gotBody, gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth, gotMethod, gotPath = r.Header.Get("Authorization"), r.Method, r.URL.RequestURI()
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		if strings.HasSuffix(r.URL.Path, "/missing") {
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"detail":"nope"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"bot_id":"b1"}`))
+	}))
+	defer ts.Close()
+	env := map[string]string{"MEETSTREAM_API_KEY": "ms_k", "MEETSTREAM_API_URL": ts.URL + "/api/v1"}
+	out, code := run(t, env, "api", "/bots/create_bot", "-X", "post", "-d", `{"meeting_link":"x"}`)
+	if code != 0 || gotAuth != "Token ms_k" || gotMethod != "POST" || gotPath != "/api/v1/bots/create_bot" || gotBody != `{"meeting_link":"x"}` || !strings.Contains(out, "b1") {
+		t.Fatalf("code=%d auth=%q %s %s body=%q out=%s", code, gotAuth, gotMethod, gotPath, gotBody, out)
+	}
+	if strings.Contains(out, "ms_k") {
+		t.Fatal("the key must not be printed")
+	}
+	out, code = run(t, env, "api", "/missing", "--envelope")
+	if code != 0 || !strings.Contains(out, `"status":404`) {
+		t.Fatalf("envelope: code=%d out=%s", code, out)
+	}
+	if _, code = run(t, env, "api", "/missing"); code != 1 {
+		t.Fatalf("non-2xx without envelope: code=%d", code)
+	}
+	for _, bad := range []string{"https://evil.example/x", "//evil.example/x", "bots", "/a b"} {
+		if _, code := run(t, env, "api", bad); code != 2 {
+			t.Errorf("path %q: code=%d", bad, code)
+		}
+	}
+	if _, code := run(t, env, "api", "/bots", "-d", "{not json"); code != 2 {
+		t.Fatal("bad JSON must be refused")
+	}
+	if _, code := run(t, nil, "api", "/bots"); code != 2 {
+		t.Fatal("not signed in must exit 2")
 	}
 }
