@@ -62,7 +62,7 @@ Append `--json --no-input` to commands in this table.
 | `calendar schedule/unschedule <event-id>` | API scheduling result |
 | `calendar auto-join <on/off/enable/disable> [-n <name>] [--video]` | API auto-scheduling result |
 | `calendar reschedule <bot-id> <iso8601>` / `cancel <bot-id>` | API scheduled-bot result |
-| `listen [-p 3333] [--host 127.0.0.1] [--path /webhook] [--forward <url>]` | One JSON line per received event; invalid JSON becomes `{raw: str}`; Ctrl-C exits 130 |
+| `listen [-p 3333] [--host 127.0.0.1] [--path /webhook] [--forward-to <url>] [--tunnel cloudflared\|ngrok\|https://…]` | One JSON line per received event; invalid JSON becomes `{raw: str}`; Ctrl-C exits 130. With `--json`, stderr gets one line `{local_url, public_url, tunnel, forward_to}`; stdout stays one line per event. While it runs, `join` with no `-c` sends events here (tunnel URL, or the local URL when `MEETSTREAM_API_URL` is local). Missing tunnel binary: exit 3 with an install hint |
 | `mcp add <claude/codex/cursor/vscode>` | `{agent, path, entry: {type: "http", url: "https://mcp.meetstream.ai/mcp"}, snippet, written: false}`; print-only |
 | `mcp add <codex/cursor/vscode> --write` | `{agent, path, entry: {type: "http", url: "https://mcp.meetstream.ai/mcp"}, written: true}`; existing config backed up to `.bak`; refuses an existing backup; Claude prints its `claude mcp add` command and does not support `--write` |
 
@@ -74,6 +74,25 @@ Append `--json --no-input` to commands in this table.
 MCP config writes preserve unrelated entries. JSON comments and ambiguous TOML
 (multiline strings, inline/dotted MCP tables or alternate MeetStream section
 spellings) require manual editing with the printed snippet. No API key is written.
+
+## Guided flows (1.1)
+
+| Command | JSON shape |
+|---|---|
+| `init --list --json` | `{use_cases: [{id, title, summary, langs, options, available}], transcription: [...], live_transcription: [...], llm: [...], email: [...]}` |
+| `init <use-case> --lang <python\|node> [--transcription <id>] [--live-transcription <id>] [--llm anthropic\|openai\|none] [--email resend\|sendgrid\|smtp\|none] [--dir <path>] --yes --json` | `{use_case, lang, dir, path, files: [...], env: {filled, missing}, next: [...]}`. Writes the template, `.env` (mode 0600, key never printed) and `AGENTS.md`. Missing `--use-case` with `--no-input`: exit 2. Non-empty folder: exit 2 unless `--force`. Coming-soon use case: exit 3 |
+| `env [--dir .] [--check] [--overwrite]` | `{path, set, filled, missing}`; never prints values. `--check` writes nothing and exits 3 when a key is empty |
+| `join <url> --transcription <id>` | Same as `-t`; post-call provider (`transcription providers`). Cannot be combined with `--live-transcription` (a bot runs one provider): exit 2 |
+| `join <url> --live-transcription <id>` | Maps `meetstream` → `meetstream_streaming` etc.; webhook = `--live-transcript-webhook`, else the running `listen` session, else exit 2 |
+| `join <url> --follow --json` | NDJSON: `{event: "sent", bot_id}`, `{event: "status", status}` per change, then `{event: "transcript_ready", segments, next}` (exit 0), `{event: "done", transcript: "not requested"\|"live only"}` (exit 0), or exit 1 (bot not admitted, denied, failed) / exit 4 (transcript failed) |
+| `transcribe <bot-id> --transcription <id>` | Same as `-p` (default still `deepgram`) |
+| `transcription providers --json` | `{post_call: [{id, label, key: "none"\|"dashboard", note}], live: [{id, maps_to, ...}], defaults}` |
+| `trigger <event> [--forward-to <url>] [--bot <id>] --json` | `{sent, event, bot_id, to, status, ms}`; production envelope (`bot.notallowed` is sent as `event: "bot.stopped"`, `bot_event: "bot.notallowed"`). Default target: the running `listen`. `--list` for names. Non-2xx answer: exit 1 |
+| `mock [--scenario <name>] [--port 4010] [--step 2] --json` | NDJSON `{event: "ready", url, scenario}` then `{event: "log", line}`. Set `MEETSTREAM_API_URL` to `url`. Scenarios: notetaker-happy, waiting-room-timeout, transcript-failed, bot-removed, zoom-needs-setup. Loopback only; any key accepted; no bots join |
+| `ai install [claude\|codex\|cursor ...] [--all] [--dry-run] --json` | `{dry_run, agents: [{agent, skill, mcp, changed, todo}]}`. Writes this SKILL.md to the agent's skills folder and the hosted MCP entry (backup to `.bak`); Claude's MCP is a printed `claude mcp add` command (`todo`) |
+| `commands --json` | `{version, global_flags, exit_codes, error_shape, commands: [{path, use, short, group, flags: [{name, shorthand, type, default, usage, enum}]}]}` |
+
+Build without live bots: `meetstream mock &`, `export MEETSTREAM_API_URL=http://127.0.0.1:4010/api/v1`, then `listen`, `join --follow` and `trigger` work end to end at no cost.
 
 Errors (with `--json`): `{"error": {"message": str, "hint": str, "exit_code": int}}`.
 

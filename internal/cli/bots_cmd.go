@@ -105,13 +105,17 @@ func createCmd(name string) *cobra.Command {
 	var o api.CreateOpts
 	var attr, param []string
 	var idem, agentAlias, storage string
-	var own, noOwn, noStrict bool
+	var own, noOwn, noStrict, follow bool
+	var transcription, liveTranscription string
 	cmd := &cobra.Command{Use: name + " <meeting-url>", Short: "Send a bot to a meeting", GroupID: "meet", Args: cobra.ExactArgs(1)}
 	f := cmd.Flags()
 	f.StringVarP(&o.Name, "name", "n", "MeetStream Bot", "bot display name")
 	f.BoolVar(&o.Video, "video", false, "record video")
 	f.StringVar(&o.VideoLayout, "video-layout", "", "mixed video layout")
-	f.StringVarP(&o.Transcript, "transcript", "t", "", "transcription provider")
+	f.StringVar(&transcription, "transcription", "", "transcript after the call: meetstream, deepgram, assemblyai, ... (meetstream transcription providers)")
+	f.StringVar(&liveTranscription, "live-transcription", "", "live transcript while the meeting runs: meetstream, deepgram, assemblyai, smallest")
+	f.BoolVar(&follow, "follow", false, "stay and print each status change, then wait for the transcript")
+	f.StringVarP(&o.Transcript, "transcript", "t", "", "same as --transcription (raw API provider name)")
 	f.StringVarP(&o.Language, "language", "l", "", "transcription language")
 	f.StringVarP(&o.Callback, "callback", "c", "", "lifecycle webhook")
 	f.StringVar(&o.JoinAt, "join-at", "", "join at")
@@ -169,6 +173,9 @@ func createCmd(name string) *cobra.Command {
 		if o.AgentConfigID == "" {
 			o.AgentConfigID = agentAlias
 		}
+		if err := applyTranscriptionFlags(&o, transcription, liveTranscription); err != nil {
+			return err
+		}
 		o.Attrs, err = attrs(attr, "--attr")
 		if err != nil {
 			return err
@@ -188,6 +195,9 @@ func createCmd(name string) *cobra.Command {
 			fmt.Fprintln(os.Stderr, "⚠ "+w)
 		}
 		status, v, err := c.CreateBot(cmd.Context(), payload, idem)
+		if follow && err == nil {
+			return followBot(cmd, c, v, o, status == 507)
+		}
 		return resultView(v, err, func(v any) string { return renderJoinResult(v, o.Name, o.MeetingLink, status == 507) })
 	}
 	// Commander accepts multiple key=value entries after these flags.

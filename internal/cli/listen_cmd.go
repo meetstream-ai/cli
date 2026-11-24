@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/meetstream-ai/cli/internal/config"
 	"github.com/meetstream-ai/cli/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -103,38 +104,92 @@ func serveWebhooks(ctx context.Context, ln net.Listener, handler http.Handler) e
 
 func newListenCmd() *cobra.Command {
 	var port int
-	var host, path, forward string
-	cmd := &cobra.Command{Use: "listen", Short: "Receive local webhooks (expose with a tunnel)", GroupID: "tool", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if port < 0 || port > 65535 {
-			return usageErr("port must be between 0 and 65535", "")
-		}
-		if !strings.HasPrefix(path, "/") {
-			return usageErr("path must start with /", "")
-		}
-		if forward != "" {
-			u, err := url.Parse(forward)
-			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-				return usageErr("forward must be an HTTP(S) URL", "")
+	var host, path, forward, forwardTo, tunnel string
+	cmd := &cobra.Command{Use: "listen", Short: "Receive bot events on this computer (--tunnel for a public URL)", GroupID: "tool", Args: cobra.NoArgs,
+		Long: `Receive webhooks on this computer and print one line per event.
+
+While it runs, "meetstream join" on this computer sends the bot's events here
+when you pass no -c: through the tunnel URL with --tunnel, or straight to the
+local URL when the CLI talks to "meetstream mock".
+
+--tunnel cloudflared|ngrok starts a tunnel binary you installed (MeetStream
+ships none). --tunnel https://... uses a public URL you already run.
+The MeetStream relay (no tunnel at all) is planned.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if port < 0 || port > 65535 {
+				return usageErr("port must be between 0 and 65535", "")
 			}
-		}
-		ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "Listening on http://%s%s · expose with a tunnel · Ctrl-C to stop\n", ln.Addr(), path)
-		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
-		defer stop()
-		out := ui.Out
-		if g.JSON {
-			out = os.Stdout
-		}
-		return serveWebhooks(ctx, ln, webhookHandler(path, forward, g.JSON, out, os.Stderr))
-	}}
+			if !strings.HasPrefix(path, "/") {
+				return usageErr("path must start with /", "")
+			}
+			if forwardTo != "" {
+				forward = forwardTo
+			}
+			if forward != "" {
+				u, err := url.Parse(forward)
+				if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+					return usageErr("forward must be an HTTP(S) URL", "")
+				}
+			}
+			ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+			if err != nil {
+				return err
+			}
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			defer stop()
+			local := "http://" + ln.Addr().String() + path
+			public := ""
+			if tunnel != "" {
+				t, err := startTunnel(ctx, tunnel, ln.Addr().(*net.TCPAddr).Port, path)
+				if err != nil {
+					ln.Close()
+					return err
+				}
+				defer t.Stop()
+				public = t.URL
+			}
+			session := &listenSession{LocalURL: local, PublicURL: public, Tunnel: tunnelName(tunnel), PID: os.Getpid(), Started: time.Now().UTC()}
+			if err := saveListenSession(session); err == nil {
+				defer removeListenSession()
+			}
+			out := ui.Out
+			if g.JSON {
+				// stdout stays one line per received event (unchanged contract); the URLs go to stderr.
+				out = os.Stdout
+				ready, _ := json.Marshal(map[string]any{"local_url": local, "public_url": public, "tunnel": session.Tunnel, "forward_to": forward})
+				fmt.Fprintln(os.Stderr, string(ready))
+			} else {
+				fmt.Fprintln(ui.Out, ui.TitleStyle.Render("◆ Listening")+" "+ui.DimStyle.Render("Ctrl-C to stop"))
+				fmt.Fprintln(ui.Out, "  Local    "+local)
+				if public != "" {
+					fmt.Fprintln(ui.Out, "  Public   "+public+"  "+ui.DimStyle.Render("("+session.Tunnel+")"))
+					if session.Tunnel == "cloudflared" {
+						ui.Warn("A quick-tunnel URL changes on each start. The MeetStream relay will remove this step.")
+					}
+				}
+				if forward != "" {
+					fmt.Fprintln(ui.Out, "  Forward  "+forward)
+				}
+				switch {
+				case public != "":
+					fmt.Fprintln(ui.Out, ui.DimStyle.Render("  New bots from this computer send events here when you pass no -c."))
+				case isLocalAPI(config.APIURL()):
+					fmt.Fprintln(ui.Out, ui.DimStyle.Render("  The CLI uses a local API (mock): new bots send events here when you pass no -c."))
+				default:
+					fmt.Fprintln(ui.Out, ui.DimStyle.Render("  The API cannot reach a local URL. Add --tunnel cloudflared|ngrok|https://..."))
+				}
+				fmt.Fprintln(ui.Out)
+			}
+			return serveWebhooks(ctx, ln, webhookHandler(path, forward, g.JSON, out, os.Stderr))
+		}}
 	f := cmd.Flags()
 	f.IntVarP(&port, "port", "p", 3333, "local port")
 	f.StringVar(&host, "host", "127.0.0.1", "bind address (0.0.0.0 must be explicit)")
 	f.StringVar(&path, "path", "/webhook", "webhook path")
-	f.StringVar(&forward, "forward", "", "also forward events to this URL")
+	f.StringVar(&forwardTo, "forward-to", "", "also forward each event to this URL (your app)")
+	f.StringVar(&forward, "forward", "", "same as --forward-to")
+	_ = f.MarkHidden("forward")
+	f.StringVar(&tunnel, "tunnel", "", "public URL: cloudflared, ngrok, or an https:// URL you run")
 	return cmd
 }
 
@@ -143,7 +198,7 @@ var eventNames = map[string]string{
 	"bot.joining": "Bot is joining", "bot.inmeeting": "Bot is in the meeting", "bot.joined": "Bot is in the meeting",
 	"bot.stopped": "Bot left the meeting", "bot.left": "Bot left the meeting", "bot.recording": "Bot is recording",
 	"transcription.processed": "Transcript ready", "audio.processed": "Audio ready", "video.processed": "Video ready",
-	"bot.waiting_room": "Bot is in the waiting room", "bot.denied": "Bot was not let in", "bot.notallowed": "Bot was not let in",
+	"bot.waiting_room": "Bot is in the waiting room", "bot.in_waiting_room": "Bot is in the waiting room", "bot.leaving": "Bot is leaving", "bot.done": "Post-call work finished", "transcription.failed": "Transcript failed", "bot.denied": "Bot was not let in", "bot.notallowed": "Bot was not let in",
 	"bot.kicked": "Bot was removed", "bot.failed": "Bot failed",
 }
 
@@ -151,6 +206,13 @@ var eventNames = map[string]string{
 // when there is one.
 func renderWebhookEvent(m map[string]any, clock string) string {
 	event := first(m, "event")
+	if event == "" && text(m["transcript"]) != "" {
+		speaker := first(m, "speakerName", "speaker")
+		if speaker == "" {
+			speaker = "Unknown"
+		}
+		return ui.DimStyle.Render(clock) + "  " + fmt.Sprintf("%-26s", "Live transcript") + "  " + ui.BoldStyle.Render(speaker) + ": " + text(m["transcript"])
+	}
 	name := eventNames[strings.ToLower(event)]
 	switch {
 	case name == "" && event == "":

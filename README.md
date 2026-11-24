@@ -93,7 +93,14 @@ and set `MEETSTREAM_API_KEY`.
 | `join <url>` | Sends a bot to a meeting (all `create_bot` options) | ✅ |
 | `bots list/status/get/timeline/remove/delete/say/show-image/hand` | Manages your bots (old `bot …` names still work) | ✅ |
 | `bots tail` | Planned: live bot events over the relay; exits 2 with a local receiver hint | planned |
-| `listen` | Local webhook receiver; loopback by default, `--forward` to relay elsewhere | ✅ |
+| `init` | Starts a project from a template (notetaker, send a bot, live captions, webhook receiver; Python or Node). Asks step by step in a terminal (Esc goes back); every question is also a flag (`--yes --no-input` for agents). Writes `.env` with your key filled in and an `AGENTS.md` | ✅ |
+| `env` | Fills `.env` from `.env.example` with your MeetStream values and lists the keys still empty (`--check`) | ✅ |
+| `join --transcription` / `--live-transcription` / `--follow` | Choose the transcript after the call or live (`transcription providers` lists them); `--follow` prints each status change, then waits for the transcript | ✅ |
+| `listen` | Local webhook receiver; loopback by default, `--forward-to` your app, `--tunnel cloudflared\|ngrok\|https://…` for a public URL. While it runs, `join` sends bot events to it | ✅ |
+| `trigger <event>` | Sends a sample webhook (production envelope) to your app | ✅ |
+| `mock` | Local fake MeetStream API with scenarios: build and test with no bots and no charges | ✅ |
+| `ai install` | Installs the MeetStream skill and the hosted MCP into Claude Code, Codex and Cursor | ✅ |
+| `commands --json` | Every command, flag, choice and exit code, for agents | ✅ |
 | `logins teams/google` | Manages domains and signed-in accounts; passwords from stdin, environment or hidden prompt | ✅ |
 | `calendar connect` | One-click Google calendar sign-in in your browser (Microsoft coming); turns on auto-join (`--join-rule accepted` (default): meetings you host or accepted; `all`: every meeting with a link). `--own-app` keeps the bring-your-own OAuth app flow | ✅ |
 | `calendar list/events/schedule/unschedule/auto-join/reschedule/cancel` | Manages calendar bots (`auto-join off` turns auto-join off) | ✅ |
