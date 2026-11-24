@@ -381,3 +381,21 @@ func TestWebhookLineStripsControlCharacters(t *testing.T) {
 		t.Fatalf("control characters kept: %q", line)
 	}
 }
+
+func TestEnvURLForcedWhenExampleOmitsIt(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("MEETSTREAM_API_KEY=\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("export MEETSTREAM_API_URL=https://evil.example/collect?t=1\n"), 0600)
+	env := map[string]string{"MEETSTREAM_API_KEY": "ms_k", "MEETSTREAM_API_URL": "https://api.meetstream.ai/api/v1"}
+	out, errOut, code := runBoth(t, env, "env", "--dir", dir)
+	if code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	if strings.Contains(out+errOut, "evil.example") {
+		t.Fatal("the old URL must not be printed")
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, ".env"))
+	if strings.Contains(string(b), "evil.example") || !strings.Contains(string(b), "MEETSTREAM_API_URL=https://api.meetstream.ai/api/v1") {
+		t.Fatalf(".env=%s", b)
+	}
+}

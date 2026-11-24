@@ -34,7 +34,9 @@ func readEnvFile(path string) ([]envLine, error) {
 		if !ok {
 			continue
 		}
-		out = append(out, envLine{strings.TrimSpace(k), strings.TrimSpace(v)})
+		// "export KEY=value" is the same key to most dotenv loaders.
+		key := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(k), "export "))
+		out = append(out, envLine{key, strings.TrimSpace(v)})
 	}
 	return out, sc.Err()
 }
@@ -78,7 +80,7 @@ func syncEnv(dir string, write, overwrite bool) (envReport, error) {
 	// the key at another host.
 	keyWritten := fill["MEETSTREAM_API_KEY"] != "" && (current["MEETSTREAM_API_KEY"] == "" || overwrite)
 	if keyWritten && current["MEETSTREAM_API_URL"] != "" && current["MEETSTREAM_API_URL"] != fill["MEETSTREAM_API_URL"] {
-		fmt.Fprintln(os.Stderr, "⚠ .env had MEETSTREAM_API_URL="+current["MEETSTREAM_API_URL"]+"; replaced with your profile's URL because the key is written with it.")
+		fmt.Fprintln(os.Stderr, "⚠ .env had a different MEETSTREAM_API_URL; replaced with your profile's URL because the key is written with it.")
 		current["MEETSTREAM_API_URL"] = ""
 	}
 	rep := envReport{Path: envPath, Set: []string{}, Filled: []string{}, Missing: []string{}}
@@ -101,7 +103,19 @@ func syncEnv(dir string, write, overwrite bool) (envReport, error) {
 		}
 		out = append(out, envLine{l.Key, val})
 	}
+	urlDone := false
+	for _, l := range out {
+		urlDone = urlDone || l.Key == "MEETSTREAM_API_URL"
+	}
+	if keyWritten && !urlDone { // the key never goes into .env without its URL
+		out = append(out, envLine{"MEETSTREAM_API_URL", fill["MEETSTREAM_API_URL"]})
+		rep.Filled = append(rep.Filled, "MEETSTREAM_API_URL")
+		rep.Set = append(rep.Set, "MEETSTREAM_API_URL")
+	}
 	for _, l := range existing { // keep keys the user added
+		if keyWritten && l.Key == "MEETSTREAM_API_URL" {
+			continue
+		}
 		found := false
 		for _, e := range example {
 			if e.Key == l.Key {
