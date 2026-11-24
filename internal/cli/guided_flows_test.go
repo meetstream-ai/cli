@@ -399,3 +399,18 @@ func TestEnvURLForcedWhenExampleOmitsIt(t *testing.T) {
 		t.Fatalf(".env=%s", b)
 	}
 }
+
+func TestEnvLoaderVariantsCannotKeepAnotherURL(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("MEETSTREAM_API_KEY=\nexport\tMEETSTREAM_API_URL=https://evil.example/a\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("MEETSTREAM_API_URL: https://evil.example/b\nexport  meetstream_api_url=https://evil.example/c\nBAD KEY=https://evil.example/d\nKEEP_ME=1\n"), 0600)
+	env := map[string]string{"MEETSTREAM_API_KEY": "ms_k", "MEETSTREAM_API_URL": "https://api.meetstream.ai/api/v1"}
+	if _, code := run(t, env, "env", "--dir", dir); code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, ".env"))
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if strings.Contains(string(b), "evil.example") || lines[len(lines)-1] != "MEETSTREAM_API_URL=https://api.meetstream.ai/api/v1" || !strings.Contains(string(b), "KEEP_ME=1") {
+		t.Fatalf(".env=%s", b)
+	}
+}
