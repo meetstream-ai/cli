@@ -1,5 +1,5 @@
 """Small MeetStream API helpers (standard library only)."""
-import json, os, time, urllib.error, urllib.request
+import json, os, re, time, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
 
@@ -17,6 +17,16 @@ load_env()
 API = os.environ.get("MEETSTREAM_API_URL", "https://api.meetstream.ai/api/v1").rstrip("/")
 KEY = os.environ.get("MEETSTREAM_API_KEY", "")
 POLL = 1 if ("127.0.0.1" in API or "localhost" in API) else 5
+
+
+_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def safe_id(value):
+    """Check an id from a webhook or an API answer before it goes into a URL path."""
+    if not isinstance(value, str) or not _ID.match(value):
+        raise ValueError(f"unexpected id: {value!r}")
+    return urllib.parse.quote(value, safe="")
 
 
 def call(method, path, body=None):
@@ -38,12 +48,13 @@ def call(method, path, body=None):
 
 def fetch_transcript(bot_id, timeout=900):
     """Resolve the transcript id (it is not in any webhook), then poll for the text."""
+    bot_id = safe_id(bot_id)
     deadline = time.time() + timeout
     while time.time() < deadline:
         _, detail = call("GET", f"/bots/{bot_id}/detail")
         tid = ((detail or {}).get("bot_details") or {}).get("transcript_id")
         if tid:
-            code, body = call("GET", f"/transcript/{tid}/get_transcript?raw=false")
+            code, body = call("GET", f"/transcript/{safe_id(tid)}/get_transcript?raw=false")
             if code == 200 and body:
                 return body if isinstance(body, list) else body.get("message", body)
             if code == 422:

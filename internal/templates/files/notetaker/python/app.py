@@ -10,7 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from deliver import send_notes
-from meetstream_api import fetch_transcript, transcript_lines
+from meetstream_api import fetch_transcript, safe_id, transcript_lines
 from summarize import summarize
 
 PORT = int(os.environ.get("PORT", "8000"))
@@ -28,6 +28,8 @@ def on_transcript(bot_id):
     send_notes(bot_id, notes)
 
 
+# Anyone who can reach this port can post events. Keep it on 127.0.0.1 and put
+# "meetstream listen" in front of it; MeetStream webhooks are not signed today.
 class Hook(BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -43,6 +45,11 @@ class Hook(BaseHTTPRequestHandler):
                 return
             _seen.add(key)
         name, bot = e.get("event"), e.get("bot_id")
+        try:
+            safe_id(bot)
+        except ValueError:
+            print(f"ignored an event with a bad bot_id: {bot!r}", flush=True)
+            return
         if name == "transcription.processed":
             print(f"[{bot}] transcript ready: summarizing", flush=True)
             threading.Thread(target=on_transcript, args=(bot,), daemon=True).start()

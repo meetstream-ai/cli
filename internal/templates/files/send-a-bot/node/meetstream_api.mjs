@@ -17,6 +17,12 @@ const KEY = process.env.MEETSTREAM_API_KEY || "";
 export const POLL_MS = /127\.0\.0\.1|localhost/.test(API) ? 1000 : 5000;
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Check an id from a webhook or an API answer before it goes into a URL path.
+export function safeId(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw new Error(`unexpected id: ${value}`);
+  return encodeURIComponent(value);
+}
+
 export async function call(method, path, body) {
   const res = await fetch(API + path, {
     method,
@@ -31,12 +37,13 @@ export async function call(method, path, body) {
 
 // The transcript id is not in any webhook: read it from the bot detail, then poll.
 export async function fetchTranscript(botId, timeoutMs = 900000) {
+  botId = safeId(botId);
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
     const [, detail] = await call("GET", `/bots/${botId}/detail`);
     const tid = detail?.bot_details?.transcript_id;
     if (tid) {
-      const [code, body] = await call("GET", `/transcript/${tid}/get_transcript?raw=false`);
+      const [code, body] = await call("GET", `/transcript/${safeId(tid)}/get_transcript?raw=false`);
       if (code === 200 && body) return Array.isArray(body) ? body : body.message ?? body;
       if (code === 422) throw new Error(body?.message || "transcript failed");
     }

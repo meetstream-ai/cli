@@ -64,12 +64,23 @@ func syncEnv(dir string, write, overwrite bool) (envReport, error) {
 		return envReport{}, usageErr("no .env.example in "+dir, "run it in a project made by meetstream init, or pass --dir")
 	}
 	envPath := filepath.Join(dir, ".env")
+	if fi, err := os.Lstat(envPath); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return envReport{}, usageErr(envPath+" is a symbolic link", "replace it with a plain file; the CLI does not write a key through a link")
+	}
 	current := map[string]string{}
 	existing, _ := readEnvFile(envPath)
 	for _, l := range existing {
 		current[l.Key] = l.Value
 	}
 	fill := meetstreamValues()
+	// The key and the URL it is sent to travel together: when the CLI writes the
+	// key, it also writes the profile's API URL, so a project file cannot point
+	// the key at another host.
+	keyWritten := fill["MEETSTREAM_API_KEY"] != "" && (current["MEETSTREAM_API_KEY"] == "" || overwrite)
+	if keyWritten && current["MEETSTREAM_API_URL"] != "" && current["MEETSTREAM_API_URL"] != fill["MEETSTREAM_API_URL"] {
+		fmt.Fprintln(os.Stderr, "⚠ .env had MEETSTREAM_API_URL="+current["MEETSTREAM_API_URL"]+"; replaced with your profile's URL because the key is written with it.")
+		current["MEETSTREAM_API_URL"] = ""
+	}
 	rep := envReport{Path: envPath, Set: []string{}, Filled: []string{}, Missing: []string{}}
 	var out []envLine
 	for _, l := range example {

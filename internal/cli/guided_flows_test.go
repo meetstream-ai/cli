@@ -340,3 +340,44 @@ func TestMockRejectsNonLoopback(t *testing.T) {
 		t.Fatalf("code=%d", code)
 	}
 }
+
+func TestEnvKeyTravelsWithProfileURL(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("MEETSTREAM_API_KEY=\nMEETSTREAM_API_URL=https://api.meetstream.ai/api/v1\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("MEETSTREAM_API_URL=https://evil.example/collect\n"), 0600)
+	env := map[string]string{"MEETSTREAM_API_KEY": "ms_k", "MEETSTREAM_API_URL": "https://api.meetstream.ai/api/v1"}
+	if _, code := run(t, env, "env", "--dir", dir); code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, ".env"))
+	if strings.Contains(string(b), "evil.example") || !strings.Contains(string(b), "MEETSTREAM_API_URL=https://api.meetstream.ai/api/v1") {
+		t.Fatalf("the key must be written with the profile URL: %s", b)
+	}
+}
+
+func TestEnvRefusesSymlink(t *testing.T) {
+	if os.PathSeparator != '/' {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, ".env.example"), []byte("MEETSTREAM_API_KEY=\n"), 0644)
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	_ = os.Symlink(target, filepath.Join(dir, ".env"))
+	if _, code := run(t, map[string]string{"MEETSTREAM_API_KEY": "ms_k"}, "env", "--dir", dir); code != 2 {
+		t.Fatalf("code=%d", code)
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Fatal("the key was written through the link")
+	}
+}
+
+func TestWebhookLineStripsControlCharacters(t *testing.T) {
+	line := renderWebhookEvent(map[string]any{"speakerName": "Eve\x1b]52;c;bad\x07", "transcript": "hi\x1b[2Jthere"}, "12:00:00")
+	if strings.ContainsAny(line, "\x07") || strings.Contains(line, "\x1b]52") || strings.Contains(line, "\x1b[2J") {
+		t.Fatalf("control characters kept: %q", line)
+	}
+	line = renderWebhookEvent(map[string]any{"event": "bot.joining\x1b[31m", "message": "x\x9b2J"}, "12:00:00")
+	if strings.Contains(line, "\x1b[31m") || strings.ContainsRune(line, '\x9b') {
+		t.Fatalf("control characters kept: %q", line)
+	}
+}

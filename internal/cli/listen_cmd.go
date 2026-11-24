@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/meetstream-ai/cli/internal/config"
 	"github.com/meetstream-ai/cli/internal/ui"
@@ -202,9 +203,25 @@ var eventNames = map[string]string{
 	"bot.kicked": "Bot was removed", "bot.failed": "Bot failed",
 }
 
+// clean removes control characters (ESC and other C0/C1 codes) from text that
+// came over the network, so a payload cannot drive the terminal.
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != ' ' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // renderWebhookEvent is one webhook as a readable line, with the next command
 // when there is one.
 func renderWebhookEvent(m map[string]any, clock string) string {
+	for _, k := range []string{"event", "bot_event", "bot_id", "bot_status", "message", "speakerName", "speaker", "transcript", "status_code"} {
+		if v, ok := m[k]; ok && v != nil {
+			m[k] = clean(text(v))
+		}
+	}
 	event := first(m, "event")
 	if event == "" && text(m["transcript"]) != "" {
 		speaker := first(m, "speakerName", "speaker")

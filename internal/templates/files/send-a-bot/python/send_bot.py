@@ -6,7 +6,7 @@ import os
 import sys
 import time
 
-from meetstream_api import POLL, call, fetch_transcript, transcript_lines
+from meetstream_api import POLL, call, fetch_transcript, safe_id, transcript_lines
 
 PROVIDERS = {
     "meetstream": {"meetstream": {"language": "auto", "translate": False}},
@@ -25,7 +25,7 @@ def main():
     code, bot = call("POST", "/bots/create_bot", body)
     if code >= 300:
         sys.exit(f"create_bot failed ({code}): {bot}")
-    bot_id = bot["bot_id"]
+    bot_id = safe_id(bot["bot_id"])
     print(f"bot {bot_id} sent")
     last = ""
     while True:
