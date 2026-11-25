@@ -30,14 +30,17 @@ var postCallProviders = []transcriptionProvider{
 	{ID: "sarvam", Label: "Sarvam", Key: "dashboard", Note: "Indian languages"},
 	{ID: "smallest", Label: "Smallest", Key: "dashboard"},
 	{ID: "jigsawstack", Label: "Interfaze (JigsawStack)", Key: "dashboard"},
-	{ID: "meeting_captions", Label: "Meeting captions", Key: "none", Note: "the platform's own captions"},
+	{ID: "aws_transcribe", Label: "AWS Transcribe", Key: "none", Note: "not for bots in the US region"},
+	{ID: "meeting_captions", Label: "Meeting captions", Key: "none", Note: "join only (not transcribe); the platform's own captions"},
 }
 
 var liveProviders = []transcriptionProvider{
 	{ID: "meetstream", Label: "MeetStream", Key: "none", MapsTo: "meetstream_streaming"},
 	{ID: "deepgram", Label: "Deepgram", Key: "dashboard", MapsTo: "deepgram_streaming"},
 	{ID: "assemblyai", Label: "AssemblyAI", Key: "dashboard", MapsTo: "assemblyai_streaming"},
+	{ID: "sarvam", Label: "Sarvam", Key: "dashboard", MapsTo: "sarvam_streaming"},
 	{ID: "smallest", Label: "Smallest", Key: "dashboard", MapsTo: "smallest_streaming"},
+	{ID: "jigsawstack", Label: "Interfaze (JigsawStack)", Key: "dashboard", MapsTo: "jigsawstack_streaming", Note: "Google Meet only"},
 }
 
 func providerIDs(list []transcriptionProvider) []string {
@@ -84,6 +87,7 @@ func newTranscriptionCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := map[string]any{"post_call": postCallProviders, "live": liveProviders,
 				"defaults": map[string]string{"join": "none (no transcript unless you pass --transcription)", "transcribe": "deepgram"},
+				"notes":    []string{"The API has no default provider for transcribe; this CLI sends deepgram unless you pass --transcription.", "deepgram needs your key in the dashboard; meetstream needs none.", "meeting_captions works on join only, not transcribe."},
 				"source":   "built into this CLI version; keys marked dashboard go under Integrations > Transcription"}
 			return emit(out, func() {
 				fmt.Fprintln(ui.Out, ui.Section("After the call")+ui.DimStyle.Render("   --transcription <id>"))

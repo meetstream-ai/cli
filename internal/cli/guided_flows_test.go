@@ -482,3 +482,25 @@ func TestAPICommand(t *testing.T) {
 		t.Fatal("not signed in must exit 2")
 	}
 }
+
+func TestProviderListsMatchServer(t *testing.T) {
+	for _, want := range []string{"sarvam_streaming", "jigsawstack_streaming"} {
+		found := false
+		for _, p := range liveProviders {
+			found = found || p.MapsTo == want
+		}
+		if !found {
+			t.Errorf("live list lacks %s", want)
+		}
+	}
+	if _, known := postCallProvider("aws_transcribe"); !known {
+		t.Error("aws_transcribe missing")
+	}
+	env := map[string]string{"MEETSTREAM_API_KEY": "k", "MEETSTREAM_API_URL": "http://127.0.0.1:1/api/v1"}
+	if _, code := run(t, env, "transcribe", "b1", "--transcription", "meeting_captions"); code != 2 {
+		t.Fatalf("transcribe meeting_captions: code=%d", code)
+	}
+	if _, code := run(t, env, "transcribe", "b1", "--transcription", "deepgram_streaming"); code != 2 {
+		t.Fatalf("transcribe streaming: code=%d", code)
+	}
+}

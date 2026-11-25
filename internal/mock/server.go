@@ -44,7 +44,7 @@ func ScenarioNames() []string {
 }
 
 // streamingOnly providers send live text and make no post-call transcript.
-var streamingOnly = map[string]bool{"meetstream_streaming": true, "deepgram_streaming": true, "assemblyai_streaming": true, "jigsawstack_streaming": true, "smallest_streaming": true, "meeting_captions": true}
+var streamingOnly = map[string]bool{"meetstream_streaming": true, "deepgram_streaming": true, "assemblyai_streaming": true, "jigsawstack_streaming": true, "smallest_streaming": true, "sarvam_streaming": true, "meeting_captions": true}
 
 type bot struct {
 	ID, Name, Link, Status, Provider, Callback, LiveURL string

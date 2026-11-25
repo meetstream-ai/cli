@@ -110,6 +110,9 @@ func newTranscribeCmd() *cobra.Command {
 			}
 			provider = transcription
 		}
+		if provider == "meeting_captions" || strings.HasSuffix(provider, "_streaming") {
+			return nil, &api.UsageError{Msg: provider + " cannot re-run a transcript: choose a post-call provider such as meetstream (meetstream transcription providers)"}
+		}
 		return c.Transcribe(cmd.Context(), args[0], provider, language, callback)
 	})
 	cmd.GroupID = "meet"
