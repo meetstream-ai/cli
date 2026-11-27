@@ -224,7 +224,18 @@ func (s *Server) botRoute(w http.ResponseWriter, r *http.Request, id, action str
 			b.TranscriptState = "completed"
 			s.mu.Unlock()
 		}()
-		writeJSON(w, 202, map[string]any{"message": "Transcription started (mock)", "transcript_id": b.TranscriptID, "provider": prov})
+		writeJSON(w, 200, map[string]any{"message": "Transcription started (mock)", "transcript_id": b.TranscriptID, "provider": prov})
+	case "get_transcript":
+		// GET /bots/{bot_id}/get_transcript: same answers as /transcript/{id}/get_transcript.
+		if strings.EqualFold(snap.Status, "NotAllowed") || strings.EqualFold(snap.Status, "Denied") {
+			writeJSON(w, 409, map[string]any{"message": "The bot was not admitted to the meeting, so there is no transcript."})
+			return
+		}
+		if snap.TranscriptID == "" {
+			writeJSON(w, 404, map[string]any{"message": "No transcript found for this bot"})
+			return
+		}
+		s.getTranscript(w, snap.TranscriptID)
 	case "remove_bot":
 		s.mu.Lock()
 		b.Status = "Stopped"
@@ -256,7 +267,8 @@ func (s *Server) getTranscript(w http.ResponseWriter, tid string) {
 	case state == "failed":
 		writeJSON(w, 422, map[string]any{"message": "Transcript processing failed: audio too short", "transcript_status": "failed", "transcript_id": tid})
 	case state != "completed":
-		writeJSON(w, 404, map[string]any{"detail": "Transcript is still processing"})
+		// Production: 202 while processing (get_transcript Lambda), never 404.
+		writeJSON(w, 202, map[string]any{"message": "Transcript is still being processed. Current status: " + state})
 	default:
 		writeJSON(w, 200, sampleTranscript())
 	}

@@ -61,11 +61,19 @@ func (c *Client) Transcribe(ctx context.Context, botID, provider, language, call
 }
 
 func (c *Client) GetTranscriptByID(ctx context.Context, transcriptID string, raw bool) (any, error) {
+	data, _, err := c.getTranscriptStatus(ctx, transcriptID, raw)
+	return data, err
+}
+
+// getTranscriptStatus also returns the HTTP status: the API answers 202 while the transcript is
+// still being processed (a JSON message, not a transcript), so 202 means "not ready yet".
+func (c *Client) getTranscriptStatus(ctx context.Context, transcriptID string, raw bool) (any, int, error) {
 	q := "false"
 	if raw {
 		q = "true"
 	}
-	return c.getJSON(ctx, "/transcript/"+transcriptID+"/get_transcript?raw="+q)
+	status, data, err := c.doJSON(ctx, "GET", "/transcript/"+transcriptID+"/get_transcript?raw="+q, nil, nil)
+	return data, status, err
 }
 
 // ResolveTranscriptID reads detail, then /transcriptions. Detail errors are ignored.
@@ -147,11 +155,13 @@ func (c *Client) GetTranscript(ctx context.Context, botID string, opt Transcript
 			return nil, err
 		}
 		if tid != "" {
-			data, gerr := c.GetTranscriptByID(ctx, tid, opt.Raw)
+			data, status, gerr := c.getTranscriptStatus(ctx, tid, opt.Raw)
 			if gerr != nil {
 				if !opt.Wait || shouldStopTranscriptPoll(gerr) {
 					return nil, gerr
 				}
+			} else if status == 202 {
+				// Still being processed: not a transcript yet.
 			} else {
 				seg := unwrapTranscript(data)
 				if transcriptReady(seg) {
