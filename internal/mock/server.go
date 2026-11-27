@@ -68,6 +68,7 @@ type bot struct {
 	Chats                                               []string
 	Shots                                               []map[string]any
 	Control                                             *wsConn
+	MeetingReady                                        bool // meeting_ready sent; commands before it are dropped
 }
 
 // Server is the mock API. Step is the time between lifecycle events.
@@ -387,23 +388,8 @@ func (s *Server) run(b *bot) {
 		s.send(b.Callback, Event(event, botEvent, b.ID, status, msg, code))
 	}
 	ev("bot.joining", "bot.joining", "Joining", "Bot is joining the meeting", 200)
-	if !s.sleep(s.Step) {
-		return
-	}
-	ev("bot.in_waiting_room", "bot.in_waiting_room", "InWaitingRoom", "Waiting to be admitted", 200)
-	if !s.sleep(s.Step) {
-		return
-	}
-	if sc.End == "bot.notallowed" {
-		if !s.sleep(s.Step) {
-			return
-		}
-		ev("bot.stopped", "bot.notallowed", "NotAllowed", "Failed: Not admitted to meeting", 500)
-		s.sleep(s.Step / 2)
-		ev("bot.done", "", "", "Post-call processing finished", 200)
-		return
-	}
-	ev("bot.inmeeting", "bot.inmeeting", "InMeeting", "Bot is in the meeting", 200)
+	// Production opens the control socket while the bot is still joining, and sends
+	// meeting_ready only once it is in the meeting; Google Meet drops commands sent before then.
 	var ctrl, audio *wsConn
 	if b.ControlURL != "" {
 		if ctrl = s.dial(b, b.ControlURL, "control"); ctrl != nil {
@@ -412,7 +398,13 @@ func (s *Server) run(b *bot) {
 			s.mu.Unlock()
 			ctrl.send(map[string]any{"type": "ready", "playback_feedback": true, "bot_id": b.ID, "message": "Ready to receive messages"})
 			go s.readControl(b, ctrl)
-			ctrl.send(map[string]any{"command": "meeting_ready", "bot_id": b.ID})
+		}
+	}
+	// Live audio also starts while the bot is joining (production: both sockets open in the lobby).
+	if b.AudioURL != "" {
+		if audio = s.dial(b, b.AudioURL, "audio"); audio != nil {
+			audio.send(map[string]any{"type": "ready", "bot_id": b.ID, "message": "Ready to send audio chunks"})
+			go s.streamAudio(b, audio, 100)
 		}
 	}
 	defer func() {
@@ -425,13 +417,34 @@ func (s *Server) run(b *bot) {
 	if !s.sleep(s.Step) {
 		return
 	}
-	ev("bot.recording", "bot.recording", "Recording", "Recording started", 200)
-	if b.AudioURL != "" {
-		if audio = s.dial(b, b.AudioURL, "audio"); audio != nil {
-			audio.send(map[string]any{"type": "ready", "bot_id": b.ID, "message": "Ready to send audio chunks"})
-			go s.streamAudio(b, audio, 100)
-		}
+	ev("bot.in_waiting_room", "bot.in_waiting_room", "InWaitingRoom", "Waiting to be admitted", 200)
+	lobby := s.Step
+	if b.ControlURL != "" {
+		lobby = 4 * s.Step // live, the control socket was open 15 to 20 s before meeting_ready
 	}
+	if !s.sleep(lobby) {
+		return
+	}
+	if sc.End == "bot.notallowed" {
+		if !s.sleep(s.Step) {
+			return
+		}
+		ev("bot.stopped", "bot.notallowed", "NotAllowed", "Failed: Not admitted to meeting", 500)
+		s.sleep(s.Step / 2)
+		ev("bot.done", "", "", "Post-call processing finished", 200)
+		return
+	}
+	ev("bot.inmeeting", "bot.inmeeting", "InMeeting", "Bot is in the meeting", 200)
+	s.mu.Lock()
+	b.MeetingReady = true
+	s.mu.Unlock()
+	if ctrl != nil {
+		ctrl.send(map[string]any{"command": "meeting_ready", "bot_id": b.ID})
+	}
+	if !s.sleep(s.Step) {
+		return
+	}
+	ev("bot.recording", "bot.recording", "Recording", "Recording started", 200)
 	if b.AgentID != "" {
 		go s.callFunctions(b)
 	}

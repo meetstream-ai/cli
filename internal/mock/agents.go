@@ -594,6 +594,13 @@ func (s *Server) readControl(b *bot, c *wsConn) {
 			s.journalAdd(Entry{Kind: "ws", Path: "control", Body: map[string]any{"invalid_json": string(data)}})
 			continue
 		}
+		s.mu.Lock()
+		ready := b.MeetingReady
+		s.mu.Unlock()
+		if !ready { // Google Meet drops commands before meeting_ready, with no reply (seen live)
+			s.journalAdd(Entry{Kind: "ws", Path: "control", Body: map[string]any{"dropped_before_meeting_ready": m["command"]}})
+			continue
+		}
 		rec := map[string]any{}
 		for k, v := range m {
 			if k == "audiochunk" {
