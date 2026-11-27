@@ -20,7 +20,7 @@ func Event(event, botEvent, botID, botStatus, message string, code int) map[stri
 	m := map[string]any{
 		"event":     event,
 		"bot_id":    botID,
-		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000000"),
+		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 	}
 	if botEvent != "" {
 		m["bot_event"] = botEvent
@@ -41,7 +41,7 @@ func Event(event, botEvent, botID, botStatus, message string, code int) map[stri
 func LiveSegment(botID, speaker, speakerID, text string, turn int) map[string]any {
 	return map[string]any{
 		"bot_id": botID, "speakerName": speaker, "speakerId": speakerID,
-		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000000"),
+		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		"utterance": text, "transcript": text, "end_of_turn": true, "turn_order": turn,
 		"transcription_mode": "sentence",
 	}

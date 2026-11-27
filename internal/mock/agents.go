@@ -51,7 +51,7 @@ func liveModeOf(payload map[string]any) string {
 func livePosts(botID, speaker, speakerID, text string, turn int, mode string) []map[string]any {
 	base := func() map[string]any {
 		return map[string]any{"bot_id": botID, "speakerName": speaker, "speakerId": speakerID,
-			"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000000"), "transcription_mode": mode}
+			"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), "transcription_mode": mode}
 	}
 	switch mode {
 	case "word_level":
