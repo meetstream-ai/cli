@@ -595,10 +595,16 @@ func (s *Server) readControl(b *bot, c *wsConn) {
 			continue
 		}
 		s.mu.Lock()
-		ready := b.MeetingReady
+		ready, readyAt := b.MeetingReady, b.MeetingReadyAt
 		s.mu.Unlock()
 		if !ready { // Google Meet drops commands before meeting_ready, with no reply (seen live)
 			s.journalAdd(Entry{Kind: "ws", Path: "control", Body: map[string]any{"dropped_before_meeting_ready": m["command"]}})
+			continue
+		}
+		// Live, a chat sent 0.5 s after meeting_ready was dropped too; one at +5 s was posted.
+		// The mock scales that settling time to 3 steps.
+		if cmd, _ := m["command"].(string); cmd == "sendmsg" && time.Since(readyAt) < 3*s.Step {
+			s.journalAdd(Entry{Kind: "ws", Path: "control", Body: map[string]any{"dropped_chat_too_soon_after_meeting_ready": true}})
 			continue
 		}
 		rec := map[string]any{}

@@ -69,6 +69,7 @@ type bot struct {
 	Shots                                               []map[string]any
 	Control                                             *wsConn
 	MeetingReady                                        bool // meeting_ready sent; commands before it are dropped
+	MeetingReadyAt                                      time.Time
 }
 
 // Server is the mock API. Step is the time between lifecycle events.
@@ -436,7 +437,7 @@ func (s *Server) run(b *bot) {
 	}
 	ev("bot.inmeeting", "bot.inmeeting", "InMeeting", "Bot is in the meeting", 200)
 	s.mu.Lock()
-	b.MeetingReady = true
+	b.MeetingReady, b.MeetingReadyAt = true, time.Now()
 	s.mu.Unlock()
 	if ctrl != nil {
 		ctrl.send(map[string]any{"command": "meeting_ready", "bot_id": b.ID})
