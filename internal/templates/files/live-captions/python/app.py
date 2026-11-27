@@ -20,6 +20,8 @@ class Hook(BaseHTTPRequestHandler):
             e = json.loads(raw)
         except ValueError:
             return
+        if e.get("is_final") is False:
+            return  # raw mode: an interim result; the final POST carries the line
         if e.get("transcript") and not e.get("event"):
             print(f"\033[1m{e.get('speakerName', 'Unknown')}\033[0m: {e['transcript']}", flush=True)
         elif e.get("event") == "bot.stopped":

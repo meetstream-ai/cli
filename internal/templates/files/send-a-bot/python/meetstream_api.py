@@ -96,11 +96,19 @@ def fetch_transcript(bot_id, timeout=900):
     raise TimeoutError("transcript not ready in time")
 
 
+def segment_text(s):
+    """words[].text, then punctuated_word, then word, then the flat transcript or text."""
+    words = " ".join(
+        t for t in ((w or {}).get("text") or (w or {}).get("punctuated_word") or (w or {}).get("word") or "" for w in s.get("words") or []) if t
+    )
+    return words or s.get("transcript") or s.get("text") or ""
+
+
 def transcript_lines(segments):
     out = []
     for s in segments or []:
         who = (s.get("participant") or {}).get("name") or s.get("speaker") or "Unknown"
-        text = s.get("transcript") or s.get("text") or " ".join(w.get("word", "") for w in s.get("words", []))
+        text = segment_text(s)
         if text:
             out.append(f"{who}: {text}")
     return out

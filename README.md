@@ -96,8 +96,8 @@ and set `MEETSTREAM_API_KEY`.
 | `init` | Starts a project from a template (notetaker, send a bot, live captions, webhook receiver; Python or Node). Asks step by step in a terminal (Esc goes back); every question is also a flag (`--yes --no-input` for agents). Writes `.env` (no MeetStream key on a laptop; `--with-key` for servers) and an `AGENTS.md` | ✅ |
 | `env` | Fills `.env` from `.env.example` and lists the keys still empty (`--check`). No MeetStream key goes in by default (apps use your CLI sign-in); `--with-key` adds it for a server | ✅ |
 | `api <path>` | One MeetStream API call with your sign-in (`-X`, `-d`, `--envelope`); the init apps use it on your laptop | ✅ |
-| `join --transcription` / `--live-transcription` / `--follow` | Choose the transcript after the call or live (`transcription providers` lists them); `--follow` prints each status change, then waits for the transcript | ✅ |
-| `listen` | Local webhook receiver; loopback by default, `--forward-to` your app, `--tunnel cloudflared\|ngrok\|https://…` for a public URL. While it runs, `join` sends bot events to it | ✅ |
+| `join --transcription` / `--live-transcription` / `--follow` | Choose the transcript after the call or live (`transcription providers` lists them; live sends sentence mode, `--transcription-mode raw\|word_level` changes it); `--follow` prints each status change, then waits for the transcript | ✅ |
+| `listen` | Local webhook receiver; loopback by default, `--forward-to` your app (signature headers kept), `--tunnel cloudflared\|ngrok\|https://…` for a public URL. While it runs, `join` sends bot events to it | ✅ |
 | `trigger <event>` | Sends a sample webhook (production envelope) to your app | ✅ |
 | `mock` | Local fake MeetStream API with scenarios: build and test with no bots and no charges | ✅ |
 | `ai install` | Installs the MeetStream skill and the hosted MCP into Claude Code, Codex and Cursor | ✅ |

@@ -76,6 +76,30 @@ func (c *Client) getTranscriptStatus(ctx context.Context, transcriptID string, r
 	return data, status, err
 }
 
+// TerminalBotStatus matches whole bot status values after which the bot does
+// nothing more. RecordingPermissionDenied is not terminal.
+var TerminalBotStatus = regexp.MustCompile("^(?i)(stopped|kicked|done|error|failed|notallowed|denied|cancelled|mediaexpired)$")
+
+func (c *Client) botStatusValue(ctx context.Context, botID string) (string, error) {
+	data, err := c.BotStatus(ctx, botID)
+	if err != nil {
+		return "", err
+	}
+	m, _ := data.(map[string]any)
+	return asString(m["status"]), nil
+}
+
+// getBotTranscript is GET /bots/{id}/get_transcript. It answers 409 for a bot
+// that was not admitted (no transcript) and 202 while one is processing.
+func (c *Client) getBotTranscript(ctx context.Context, botID string, raw bool) (any, int, error) {
+	q := "false"
+	if raw {
+		q = "true"
+	}
+	status, data, err := c.doJSON(ctx, "GET", "/bots/"+botID+"/get_transcript?raw="+q, nil, nil)
+	return data, status, err
+}
+
 // ResolveTranscriptID reads detail, then /transcriptions. Detail errors are ignored.
 func (c *Client) ResolveTranscriptID(ctx context.Context, botID string) (string, error) {
 	if data, err := c.BotDetail(ctx, botID); err == nil {
@@ -148,11 +172,29 @@ func (c *Client) GetTranscript(ctx context.Context, botID string, opt Transcript
 	}
 	deadline := time.Now().Add(timeout)
 	var tid string
+	askedBot := false
 	for {
 		var err error
 		tid, err = c.ResolveTranscriptID(ctx, botID)
 		if err != nil {
 			return nil, err
+		}
+		if tid == "" && opt.Wait && !askedBot {
+			// No transcript_id. When the bot has ended, ask the bot once: a 409 means it was
+			// not admitted and there will never be a transcript, so stop instead of polling.
+			if st, serr := c.botStatusValue(ctx, botID); serr == nil && TerminalBotStatus.MatchString(st) {
+				askedBot = true
+				data, status, gerr := c.getBotTranscript(ctx, botID, opt.Raw)
+				var ae *Error
+				switch {
+				case errors.As(gerr, &ae) && ae.Status == 409:
+					return nil, gerr
+				case gerr == nil && status != 202:
+					if seg := unwrapTranscript(data); transcriptReady(seg) {
+						return &TranscriptResult{Transcript: seg}, nil
+					}
+				}
+			}
 		}
 		if tid != "" {
 			data, status, gerr := c.getTranscriptStatus(ctx, tid, opt.Raw)

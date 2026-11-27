@@ -56,11 +56,16 @@ func webhookHandler(path, forward string, jsonLines bool, out, diagnostics io.Wr
 				_ = json.NewEncoder(out).Encode(payload)
 				return
 			}
+			if isInterimTranscript(payload) {
+				// raw mode sends interim results first; the final POST prints the line once.
+				return
+			}
 			fmt.Fprintln(out, renderWebhookEvent(object(payload), time.Now().Format("15:04:05")))
 		}()
 		if forward != "" {
 			req, err := http.NewRequest("POST", forward, bytes.NewReader(raw))
 			if err == nil {
+				copyForwardHeaders(req.Header, r.Header)
 				req.Header.Set("Content-Type", "application/json")
 				var res *http.Response
 				res, err = client.Do(req)
@@ -79,6 +84,29 @@ func webhookHandler(path, forward string, jsonLines bool, out, diagnostics io.Wr
 			}
 		}
 	})
+}
+
+// isInterimTranscript is a live-transcript POST with "is_final": false (raw mode).
+func isInterimTranscript(payload any) bool {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return false
+	}
+	final, ok := m["is_final"].(bool)
+	return ok && !final
+}
+
+// copyForwardHeaders copies the X-MeetStream-* headers (signature, timestamp and
+// the others) and the User-Agent, so an app that verifies signatures accepts a
+// forwarded event.
+func copyForwardHeaders(dst, src http.Header) {
+	for k, vs := range src {
+		if strings.HasPrefix(http.CanonicalHeaderKey(k), "X-Meetstream-") || http.CanonicalHeaderKey(k) == "User-Agent" {
+			for _, v := range vs {
+				dst.Add(k, v)
+			}
+		}
+	}
 }
 
 // serveWebhooks accepts an already-bound listener so tests can use port 0.

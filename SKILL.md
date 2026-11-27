@@ -35,18 +35,18 @@ Append `--json --no-input` to commands in this table.
 |---|---|
 | `join <meeting-url>` (hidden `bot create`) | API bot creation response; same response for an idempotent replay |
 | `bots list` (hidden `bot list`) | `{bots: [...], hasNextPage?: bool, nextCursor?: str}` |
-| `bots status <id> [--watch]` | API status object, e.g. `{status: str}`; watch emits successive JSON values |
-| `bots get <id> --part detail/audio/video/streams/audio-streams/chats/screenshots/participants` | API object or array for that part; hidden `bot detail/audio/video/streams/audio-streams/chats/screenshots/participants <id>` aliases |
+| `bots status <id> [--watch]` | API status object, e.g. `{status: str}`; watch emits successive JSON values until a terminal status (whole value: Stopped, Kicked, Done, Error, Failed, NotAllowed, Denied, Cancelled, MediaExpired) |
+| `bots get <id> --part detail/audio/video/streams/audio-streams/chats/screenshots/participants` | API object or array for that part; hidden `bot detail/audio/video/streams/audio-streams/chats/screenshots/participants <id>` aliases. HTTP 202 on audio/video/streams/audio-streams/chats/screenshots (still processing): error envelope, exit 3 |
 | `bots timeline <id> [--download]` (hidden `bot timeline`) | API timeline array or `{speaker_timeline_url, size_bytes, ...}`; download emits fetched JSON |
 | `bots remove <id>` / `bots delete <id> --yes` | API result; declined deletion emits `{deleted: false}`; hidden `bot remove/delete` aliases |
 | `bots say <id> <message...>` / `bots show-image <id> <url>` / `bots hand <id> <up/down>` | API action result; hidden `bot send-message/send-image/raise-hand/lower-hand` aliases |
 | `bots summary <id>` (hidden `bot summary`) | Error envelope, exit 2; fetch `transcript` and summarize it |
-| `transcript <bot-id> [--wait] [--raw]` | Transcript JSON (array, string or provider object); exit 3 if pending; failure: `{error: "transcript_failed", reason, transcript_status, transcript_id}`, exit 4 |
+| `transcript <bot-id> [--wait] [--raw]` | Transcript JSON (array, string or provider object); exit 3 if pending; with `--wait`, a bot that ended with no transcript_id and that `GET /bots/{id}/get_transcript` answers 409 for (not admitted) exits 1 at once; failure: `{error: "transcript_failed", reason, transcript_status, transcript_id}`, exit 4 |
 | `transcriptions <bot-id>` / `transcribe <bot-id>` | API transcription list / start result |
-| `recordings <bot-id>` | `{bot_id, audio, video, streams?, audio_streams?}` |
+| `recordings <bot-id>` | `{bot_id, audio, video, streams?, audio_streams?}`; HTTP 202 (still processing): exit 3 |
 | `balance` | API balance object, e.g. `{balance_usd, currency, customer_type}`; unavailable: `{error: "balance_unavailable", status: 404, message, billing_url}`, exit 3 |
 | `mia list/get/create/update/delete/check` (alias `agents`) | API config/list/delete/check response; `check` uses `{local_agent?: {status, latency_ms?}}`, exit 3 unless status is `ok`; declined deletion: `{deleted: false}` |
-| `mia apply -f config.json` (alias `agents apply`) | API create/update result containing `agent_config_id` or `id`; presence of file `id`/`agent_config_id` selects PUT; otherwise POST |
+| `mia apply -f config.json` (alias `agents apply`) | API create/update result containing `agent_config_id` or `id`; presence of file `id`/`agent_config_id` selects PUT; otherwise POST. A saved `mia get <id> --json` answer works: `{agent_config: {...}}` is unwrapped and PascalCase keys (`AgentConfigID`, `AgentName`, `Model`, ...) become snake_case; `UserID`, `CreatedAt`, `UpdatedAt`, `Audio` and null fields are dropped |
 | `mia apply -f config.json --dry-run` | Request body object without auth or a request; `id` normalized to `agent_config_id`. YAML awaits an offline `gopkg.in/yaml.v3` dependency |
 | `logins teams/google domains` | API `{domains: [...]}` |
 | `logins teams/google domain <domain>` | API domain object with `logins` array |
@@ -62,7 +62,7 @@ Append `--json --no-input` to commands in this table.
 | `calendar schedule/unschedule <event-id>` | API scheduling result |
 | `calendar auto-join <on/off/enable/disable> [-n <name>] [--video]` | API auto-scheduling result |
 | `calendar reschedule <bot-id> <iso8601>` / `cancel <bot-id>` | API scheduled-bot result |
-| `listen [-p 3333] [--host 127.0.0.1] [--path /webhook] [--forward-to <url>] [--tunnel cloudflared\|ngrok\|https://…]` | One JSON line per received event; invalid JSON becomes `{raw: str}`; Ctrl-C exits 130. With `--json`, stderr gets one line `{local_url, public_url, tunnel, forward_to}`; stdout stays one line per event. While it runs, `join` with no `-c` sends events here (tunnel URL, or the local URL when `MEETSTREAM_API_URL` is local). Missing tunnel binary: exit 3 with an install hint |
+| `listen [-p 3333] [--host 127.0.0.1] [--path /webhook] [--forward-to <url>] [--tunnel cloudflared\|ngrok\|https://…]` | One JSON line per received event; invalid JSON becomes `{raw: str}`; Ctrl-C exits 130. With `--json`, stderr gets one line `{local_url, public_url, tunnel, forward_to}`; stdout stays one line per event. `--forward-to` copies the `X-MeetStream-*` headers (signature, timestamp) and `User-Agent`. Human output skips live-transcript POSTs with `is_final: false`; `--json` prints every event. While it runs, `join` with no `-c` sends events here (tunnel URL, or the local URL when `MEETSTREAM_API_URL` is local). Missing tunnel binary: exit 3 with an install hint |
 | `mcp add <claude/codex/cursor/vscode>` | `{agent, path, entry: {type: "http", url: "https://mcp.meetstream.ai/mcp"}, snippet, written: false}`; print-only |
 | `mcp add <codex/cursor/vscode> --write` | `{agent, path, entry: {type: "http", url: "https://mcp.meetstream.ai/mcp"}, written: true}`; existing config backed up to `.bak`; refuses an existing backup; Claude prints its `claude mcp add` command and does not support `--write` |
 
@@ -84,7 +84,7 @@ spellings) require manual editing with the printed snippet. No API key is writte
 | `env [--dir .] [--check] [--overwrite] [--with-key]` | `{path, meetstream_auth, set, filled, missing}`; never prints values. No MeetStream key by default; `--with-key` writes the key plus the profile API URL (last line). `--check` writes nothing and exits 3 when a key is empty |
 | `api <path> [-X METHOD] [-d JSON\|-] [--envelope]` | One API call with the CLI sign-in; prints the answer body (non-2xx: exit 1, 401/403: exit 2). `--envelope`: `{"status", "body"}`, exit 0 for any HTTP answer. Path must be relative (`/bots/...`) |
 | `join <url> --transcription <id>` | Same as `-t`; post-call provider (`transcription providers`). Cannot be combined with `--live-transcription` (a bot runs one provider): exit 2 |
-| `join <url> --live-transcription <id>` | Maps `meetstream` → `meetstream_streaming` etc.; webhook = `--live-transcript-webhook`, else the running `listen` session, else exit 2 |
+| `join <url> --live-transcription <id> [--transcription-mode sentence\|raw\|word_level]` | Maps `meetstream` → `meetstream_streaming` etc. and sends `transcription_mode: sentence` unless `--transcription-mode` says otherwise (`raw` adds interim POSTs with `is_final: false`; other values: exit 2); webhook = `--live-transcript-webhook`, else the running `listen` session, else exit 2 |
 | `join <url> --follow --json` | NDJSON: `{event: "sent", bot_id}`, `{event: "status", status}` per change, then `{event: "transcript_ready", segments, next}` (exit 0), `{event: "done", transcript: "not requested"\|"live only"}` (exit 0), or exit 1 (bot not admitted, denied, failed) / exit 4 (transcript failed) |
 | `transcribe <bot-id> --transcription <id>` | Same as `-p` (default still `deepgram`) |
 | `transcription providers --json` | `{post_call: [{id, label, key: "none"\|"dashboard", note}], live: [{id, maps_to, ...}], defaults}` |

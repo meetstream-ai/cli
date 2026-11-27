@@ -34,6 +34,7 @@ func flagEnums() map[string][]string {
 	return map[string][]string{
 		"join --transcription":       providerIDs(postCallProviders),
 		"join --live-transcription":  providerIDs(liveProviders),
+		"join --transcription-mode":  {"sentence", "raw", "word_level"},
 		"transcribe --transcription": providerIDs(postCallProviders),
 		"init --use-case":            {"notetaker", "send-a-bot", "live-captions", "webhook-receiver"},
 		"init --lang":                {"python", "node"},

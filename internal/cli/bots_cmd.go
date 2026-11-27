@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +29,14 @@ func apiError(err error) error {
 	var ue *api.UsageError
 	if errors.As(err, &ue) {
 		return usageErr(ue.Error(), "")
+	}
+	var nr *api.NotReadyError
+	if errors.As(err, &nr) {
+		msg := "Not ready yet"
+		if d := nr.Detail(); d != "" {
+			msg += ": " + d
+		}
+		return &ExitError{Code: 3, Message: msg, Hint: "the API is still making this data (HTTP 202); try again in a minute"}
 	}
 	var ae *api.Error
 	if errors.As(err, &ae) {
@@ -114,6 +121,7 @@ func createCmd(name string) *cobra.Command {
 	f.StringVar(&o.VideoLayout, "video-layout", "", "mixed video layout")
 	f.StringVar(&transcription, "transcription", "", "transcript after the call: meetstream, deepgram, assemblyai, ... (meetstream transcription providers)")
 	f.StringVar(&liveTranscription, "live-transcription", "", "live transcript while the meeting runs: meetstream, deepgram, assemblyai, smallest")
+	f.StringVar(&o.TranscriptionMode, "transcription-mode", "", "live transcript POSTs: sentence (default with --live-transcription), raw (adds interim results) or word_level")
 	f.BoolVar(&follow, "follow", false, "stay and print each status change, then wait for the transcript")
 	f.StringVarP(&o.Transcript, "transcript", "t", "", "same as --transcription (raw API provider name)")
 	f.StringVarP(&o.Language, "language", "l", "", "transcription language")
@@ -266,7 +274,8 @@ func botAction(use string, n int, action func(*cobra.Command, *api.Client, []str
 	}}
 }
 
-var terminalStatus = regexp.MustCompile("(?i)stopped|done|error|failed|notallowed|denied")
+// terminalStatus matches whole status values only: RecordingPermissionDenied is not terminal.
+var terminalStatus = api.TerminalBotStatus
 
 func newBotsCmd() *cobra.Command      { return botsCmd(false) }
 func newLegacyBotCmd() *cobra.Command { return botsCmd(true) }

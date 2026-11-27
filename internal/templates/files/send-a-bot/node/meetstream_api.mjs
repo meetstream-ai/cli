@@ -74,7 +74,16 @@ export async function fetchTranscript(botId, timeoutMs = 900000) {
   throw new Error("transcript not ready in time");
 }
 
+// Segment text: words[].text, then punctuated_word, then word, then the flat transcript or text.
+export const segmentText = (s = {}) => {
+  const words = (s.words || [])
+    .map((w) => w?.text || w?.punctuated_word || w?.word || "")
+    .filter(Boolean)
+    .join(" ");
+  return words || s.transcript || s.text || "";
+};
+
 export const transcriptLines = (segments = []) =>
   segments
-    .map((s) => `${s.participant?.name || s.speaker || "Unknown"}: ${s.transcript || s.text || ""}`)
+    .map((s) => `${s.participant?.name || s.speaker || "Unknown"}: ${segmentText(s)}`)
     .filter((l) => !l.endsWith(": "));

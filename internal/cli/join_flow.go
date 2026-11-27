@@ -14,7 +14,8 @@ import (
 )
 
 // applyTranscriptionFlags turns --transcription / --live-transcription into the
-// create_bot fields, and fills the callback from a running `meetstream listen`
+// create_bot fields (--live-transcription sends transcription_mode sentence
+// unless --transcription-mode says otherwise), and fills the callback from a running `meetstream listen`
 // when -c is not given. The old flags (-t, --live-transcript-webhook) keep
 // working unchanged.
 func applyTranscriptionFlags(o *api.CreateOpts, transcription, live string) error {
@@ -35,6 +36,15 @@ func applyTranscriptionFlags(o *api.CreateOpts, transcription, live string) erro
 		}
 		o.Transcript = name
 	}
+	if o.TranscriptionMode != "" {
+		o.TranscriptionMode = strings.ToLower(strings.TrimSpace(o.TranscriptionMode))
+		if !api.TranscriptionModes[o.TranscriptionMode] {
+			return usageErr("--transcription-mode must be raw, sentence or word_level", "sentence (the default) sends one POST per finished sentence")
+		}
+		if live == "" && !strings.HasSuffix(o.Transcript, "_streaming") {
+			return usageErr("--transcription-mode needs --live-transcription", "meetstream join <meeting-url> --live-transcription meetstream --transcription-mode "+o.TranscriptionMode)
+		}
+	}
 	session := loadListenSession()
 	hook := session.callbackURL(config.APIURL())
 	if live != "" {
@@ -46,6 +56,10 @@ func applyTranscriptionFlags(o *api.CreateOpts, transcription, live string) erro
 			return usageErr("-t and --live-transcription name different providers", "use only --live-transcription "+live)
 		}
 		o.Transcript = mapped
+		if o.TranscriptionMode == "" {
+			// sentence: one POST per finished sentence. The API default (raw) also sends interim results.
+			o.TranscriptionMode = "sentence"
+		}
 		if o.LiveTranscriptWebhook == "" {
 			if hook == "" {
 				return usageErr("live transcription needs a webhook the API can reach",
@@ -67,6 +81,7 @@ var statusWords = map[string]string{
 	"joining": "joining", "inwaitingroom": "waiting room — admit the bot in the meeting", "inmeeting": "in the meeting",
 	"recording": "recording", "leaving": "leaving", "stopped": "left the meeting", "notallowed": "not admitted (waiting room timeout)",
 	"denied": "the host refused entry", "failed": "failed", "error": "failed",
+	"kicked": "removed from the meeting", "cancelled": "cancelled before it joined", "mediaexpired": "the recording expired",
 }
 
 // followBot prints status changes until the bot ends, then waits for the
@@ -118,7 +133,7 @@ func followBot(cmd *cobra.Command, c *api.Client, created any, o api.CreateOpts,
 		}
 	}
 	ended := strings.ToLower(final)
-	if ended != "stopped" && ended != "done" {
+	if ended != "stopped" && ended != "done" && ended != "kicked" {
 		say(map[string]any{"event": "ended", "bot_id": id, "status": final}, "")
 		return &ExitError{Code: 1, Message: "the bot ended without recording: " + statusWords[ended], Hint: "meetstream bots get " + id + " --part detail"}
 	}
