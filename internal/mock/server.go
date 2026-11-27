@@ -50,6 +50,7 @@ type bot struct {
 	ID, Name, Link, Status, Provider, Callback, LiveURL string
 	TranscriptID                                        string
 	TranscriptState                                     string // "", processing, completed, failed
+	AudioStatus                                         string // "", Success (as /detail reports it)
 	Created                                             time.Time
 }
 
@@ -191,7 +192,10 @@ func (s *Server) botRoute(w http.ResponseWriter, r *http.Request, id, action str
 	case "status":
 		writeJSON(w, 200, map[string]any{"bot_id": id, "status": snap.Status})
 	case "detail":
-		writeJSON(w, 200, map[string]any{"bot_details": map[string]any{"bot_id": id, "bot_name": snap.Name, "meeting_link": snap.Link, "status": snap.Status, "transcript_id": snap.TranscriptID}})
+		ts := map[string]string{"completed": "Success", "failed": "Failed", "processing": "Processing"}[snap.TranscriptState]
+		writeJSON(w, 200, map[string]any{"bot_details": map[string]any{"bot_id": id, "bot_name": snap.Name, "meeting_link": snap.Link,
+			"status": snap.Status, "Status": snap.Status, "transcript_id": snap.TranscriptID,
+			"AudioStatus": snap.AudioStatus, "TranscriptStatus": ts}})
 	case "transcriptions":
 		rows := []any{}
 		if snap.TranscriptID != "" {
@@ -359,6 +363,11 @@ func (s *Server) run(b *bot) {
 	if !s.sleep(s.Step / 2) {
 		return
 	}
+	// Production order: Stopped, then MediaProcessing while media is processed, then Done.
+	s.set(b, "MediaProcessing")
+	s.mu.Lock()
+	b.AudioStatus = "Success"
+	s.mu.Unlock()
 	ev("audio.processed", "", "", "Audio ready", 200)
 	if b.Provider != "" && !streamingOnly[b.Provider] {
 		s.mu.Lock()
@@ -380,5 +389,6 @@ func (s *Server) run(b *bot) {
 		}
 	}
 	s.sleep(s.Step / 2)
+	s.set(b, "Done")
 	ev("bot.done", "", "", "Post-call processing finished", 200)
 }
