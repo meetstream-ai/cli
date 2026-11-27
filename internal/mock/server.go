@@ -465,7 +465,11 @@ func (s *Server) run(b *bot) {
 	}
 	// Agent and bridge bots stay longer, so apps have time to act during the meeting.
 	if b.AgentID != "" || b.ControlURL != "" || b.AudioURL != "" || len(sc.Lines) > 0 {
-		if !s.sleep(6 * s.Step) {
+		hold := 6 * s.Step
+		if b.ControlURL != "" && hold < 9*time.Second {
+			hold = 9 * time.Second // bridge apps wait about 5 real seconds after meeting_ready before chatting
+		}
+		if !s.sleep(hold) {
 			return
 		}
 	}
