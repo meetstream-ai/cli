@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -110,7 +111,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // ServeHTTP routes the subset of the API the CLI and the templates use.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Loopback Host only: blocks DNS rebinding from a web page to this local server.
-	if h := r.Host; !(strings.HasPrefix(h, "127.0.0.1") || strings.HasPrefix(h, "localhost") || strings.HasPrefix(h, "[::1]")) {
+	if !loopbackHost(r.Host) {
 		writeJSON(w, 403, map[string]any{"detail": "the mock answers only on 127.0.0.1 or localhost"})
 		return
 	}
@@ -492,4 +493,15 @@ func (s *Server) run(b *bot) {
 	s.sleep(s.Step / 2)
 	s.set(b, "Done")
 	ev("bot.done", "", "", "Post-call processing finished", 200)
+}
+
+// loopbackHost is whether the Host header names this machine exactly (no prefix match, so
+// localhost.example.com does not pass).
+func loopbackHost(hostport string) bool {
+	h := hostport
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		h = host
+	}
+	h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+	return h == "127.0.0.1" || h == "localhost" || h == "::1"
 }

@@ -49,3 +49,12 @@ func TestValidateMIAMessagesMatchProduction(t *testing.T) {
 		}
 	}
 }
+
+func TestLoopbackHostIsExact(t *testing.T) {
+	for h, want := range map[string]bool{"127.0.0.1:3333": true, "localhost:3333": true, "[::1]:3333": true, "localhost": true,
+		"localhost.evil.example:3333": false, "127.0.0.1.nip.io:80": false, "example.com": false} {
+		if got := loopbackHost(h); got != want {
+			t.Errorf("loopbackHost(%q) = %v, want %v", h, got, want)
+		}
+	}
+}
