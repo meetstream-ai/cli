@@ -57,57 +57,7 @@ func newMCPCmd() *cobra.Command {
 		if !write {
 			return emit(map[string]any{"agent": agent, "path": path, "entry": entry, "snippet": snippet, "written": false}, func() { fmt.Fprintln(os.Stdout, snippet) })
 		}
-		old, err := os.ReadFile(path)
-		exists := err == nil
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		var updated []byte
-		if agent == "codex" {
-			updated, err = mergeCodexMCP(old)
-			if err != nil {
-				return err
-			}
-		} else {
-			config := map[string]any{}
-			if exists && (json.Unmarshal(old, &config) != nil || config == nil) {
-				return usageErr("existing MCP config must be a JSON object", "JSON comments are not supported")
-			}
-			servers := map[string]any{}
-			if value, ok := config[key]; ok {
-				var valid bool
-				servers, valid = value.(map[string]any)
-				if !valid {
-					return usageErr("existing "+key+" must be an object", "")
-				}
-			}
-			servers["meetstream"] = entry
-			config[key] = servers
-			updated, err = json.MarshalIndent(config, "", "  ")
-			if err != nil {
-				return err
-			}
-			updated = append(updated, '\n')
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			return err
-		}
-		if exists {
-			// Exclusive creation preserves the first backup instead of silently overwriting it.
-			backup, err := os.OpenFile(path+".bak", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-			if err != nil {
-				return err
-			}
-			_, err = backup.Write(old)
-			closeErr := backup.Close()
-			if err != nil {
-				return err
-			}
-			if closeErr != nil {
-				return closeErr
-			}
-		}
-		if err := os.WriteFile(path, updated, 0600); err != nil {
+		if err := mergeMCPFile(agent, path, true); err != nil {
 			return err
 		}
 		return emit(map[string]any{"agent": agent, "path": path, "entry": entry, "written": true}, func() { fmt.Fprintln(os.Stdout, "Configured MeetStream MCP in "+path) })
@@ -147,3 +97,75 @@ func mergeCodexMCP(old []byte) ([]byte, error) {
 	}
 	return []byte(strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n\n" + codexMCPSection + "\nurl = \"" + hostedMCPURL + "\"\n"), nil
 }
+
+// mergeMCPFile puts the hosted MCP entry into an agent's config file. An existing
+// file is backed up to .bak first. With strictBackup an existing .bak stops the
+// write (the first backup is kept); otherwise the first backup is kept and the
+// write goes on.
+func mergeMCPFile(agent, path string, strictBackup bool) error {
+	entry := map[string]any{"type": "http", "url": hostedMCPURL}
+	key := "mcpServers"
+	if agent == "vscode" {
+		key = "servers"
+	}
+	old, err := os.ReadFile(path)
+	exists := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	var updated []byte
+	if agent == "codex" {
+		updated, err = mergeCodexMCP(old)
+		if err != nil {
+			return err
+		}
+	} else {
+		config := map[string]any{}
+		if exists && (json.Unmarshal(old, &config) != nil || config == nil) {
+			return usageErr("existing MCP config must be a JSON object", "JSON comments are not supported")
+		}
+		servers := map[string]any{}
+		if value, ok := config[key]; ok {
+			var valid bool
+			servers, valid = value.(map[string]any)
+			if !valid {
+				return usageErr("existing "+key+" must be an object", "")
+			}
+		}
+		servers["meetstream"] = entry
+		config[key] = servers
+		updated, err = json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return err
+		}
+		updated = append(updated, '\n')
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	if exists {
+		// Exclusive creation preserves the first backup instead of silently overwriting it.
+		backup, err := os.OpenFile(path+".bak", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil && !strictBackup && errors.Is(err, os.ErrExist) {
+			return os.WriteFile(path, updated, 0600)
+		}
+		if err != nil {
+			return err
+		}
+		_, err = backup.Write(old)
+		closeErr := backup.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	if err := os.WriteFile(path, updated, 0600); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeMCPEntry is mergeMCPFile for `meetstream ai install` (safe to run again).
+func writeMCPEntry(agent, path string) error { return mergeMCPFile(agent, path, false) }

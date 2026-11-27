@@ -152,6 +152,42 @@ func retryAfter(res *http.Response) *int {
 	return nil
 }
 
+// NotReadyError is a 202 on a read: the API is still making the data (chats,
+// audio, video, screenshots, streams) and the body is a status message, not data.
+type NotReadyError struct {
+	Method string
+	Path   string
+	Body   string
+}
+
+// Detail is the API's own message, as for Error.
+func (e *NotReadyError) Detail() string {
+	return (&Error{Body: e.Body}).Detail()
+}
+
+func (e *NotReadyError) Error() string {
+	msg := "not ready yet"
+	if d := e.Detail(); d != "" {
+		msg += ": " + d
+	}
+	return fmt.Sprintf("%s %s → HTTP 202: %s", e.Method, e.Path, msg)
+}
+
+// getReady is getJSON for reads where 202 means "not ready": it returns a
+// NotReadyError instead of the status message as data. 507 stays a success.
+func (c *Client) getReady(ctx context.Context, path string) (any, error) {
+	var out any
+	status, err := c.DoHeader(ctx, http.MethodGet, path, nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusAccepted {
+		b, _ := json.Marshal(out)
+		return nil, &NotReadyError{Method: http.MethodGet, Path: path, Body: string(b)}
+	}
+	return out, nil
+}
+
 func (c *Client) getJSON(ctx context.Context, path string) (any, error) {
 	var out any
 	err := c.Do(ctx, http.MethodGet, path, nil, &out)

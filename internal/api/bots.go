@@ -26,6 +26,10 @@ var (
 	googleHosts  = []string{"meet.google.com"}
 )
 
+// TranscriptionModes are the values of transcription_mode on a streaming provider.
+// raw sends interim results (is_final false) before each final one.
+var TranscriptionModes = map[string]bool{"raw": true, "sentence": true, "word_level": true}
+
 // CreateOpts is the CLI-shaped input to BuildCreateBotPayload. Nil pointers mean "not passed".
 type CreateOpts struct {
 	MeetingLink             string
@@ -53,6 +57,7 @@ type CreateOpts struct {
 	AgentConfigID           string
 	AgentConfigParams       map[string]string
 	LiveTranscriptWebhook   string
+	TranscriptionMode       string // raw, sentence or word_level; streaming providers only
 	LiveAudioWs             string
 	LiveVideoWs             string
 	SocketWs                string
@@ -164,7 +169,19 @@ func BuildCreateBotPayload(o CreateOpts) (map[string]any, error) {
 		payload["custom_attributes"] = o.Attrs
 	}
 	if o.Transcript != "" {
-		setRecording(payload, "transcript", map[string]any{"provider": createProvider(o.Transcript, o.Language)})
+		provider := createProvider(o.Transcript, o.Language)
+		if o.TranscriptionMode != "" {
+			if !strings.HasSuffix(o.Transcript, "_streaming") {
+				return nil, usage("--transcription-mode applies only to a live provider (--live-transcription).")
+			}
+			if !TranscriptionModes[o.TranscriptionMode] {
+				return nil, usage("--transcription-mode must be raw, sentence or word_level.")
+			}
+			if cfg, ok := provider[o.Transcript].(map[string]any); ok {
+				cfg["transcription_mode"] = o.TranscriptionMode
+			}
+		}
+		setRecording(payload, "transcript", map[string]any{"provider": provider})
 	}
 	if o.RetentionHours != "" {
 		n, err := strconv.ParseFloat(o.RetentionHours, 64)
@@ -358,19 +375,19 @@ func (c *Client) BotDetail(ctx context.Context, id string) (any, error) {
 }
 
 func (c *Client) BotAudio(ctx context.Context, id string) (any, error) {
-	return c.getJSON(ctx, "/bots/"+id+"/get_audio")
+	return c.getReady(ctx, "/bots/"+id+"/get_audio")
 }
 
 func (c *Client) BotVideo(ctx context.Context, id string) (any, error) {
-	return c.getJSON(ctx, "/bots/"+id+"/get_video")
+	return c.getReady(ctx, "/bots/"+id+"/get_video")
 }
 
 func (c *Client) RecordingStreams(ctx context.Context, id string) (any, error) {
-	return c.getJSON(ctx, "/bots/"+id+"/get_recording_streams")
+	return c.getReady(ctx, "/bots/"+id+"/get_recording_streams")
 }
 
 func (c *Client) AudioStreams(ctx context.Context, id string) (any, error) {
-	return c.getJSON(ctx, "/bots/"+id+"/get_audio_streams")
+	return c.getReady(ctx, "/bots/"+id+"/get_audio_streams")
 }
 
 func (c *Client) SpeakerTimeline(ctx context.Context, id string) (any, error) {
@@ -407,11 +424,11 @@ func (c *Client) DownloadJSON(ctx context.Context, rawURL string) (any, error) {
 }
 
 func (c *Client) Chats(ctx context.Context, id string) (any, error) {
-	return c.getJSON(ctx, "/bots/"+id+"/get_chats")
+	return c.getReady(ctx, "/bots/"+id+"/get_chats")
 }
 
 func (c *Client) Screenshots(ctx context.Context, id string) (any, error) {
-	return c.getJSON(ctx, "/bots/"+id+"/screenshots")
+	return c.getReady(ctx, "/bots/"+id+"/screenshots")
 }
 
 func (c *Client) Participants(ctx context.Context, id string) (any, error) {

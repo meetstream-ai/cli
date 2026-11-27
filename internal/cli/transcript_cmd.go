@@ -102,12 +102,22 @@ func newTranscriptionsCmd() *cobra.Command {
 	return cmd
 }
 func newTranscribeCmd() *cobra.Command {
-	var provider, language, callback string
+	var provider, transcription, language, callback string
 	cmd := botAction("transcribe <bot-id>", 1, func(cmd *cobra.Command, c *api.Client, args []string) (any, error) {
+		if transcription != "" {
+			if cmd.Flags().Changed("provider") && provider != transcription {
+				return nil, &api.UsageError{Msg: "--transcription and -p name different providers"}
+			}
+			provider = transcription
+		}
+		if provider == "meeting_captions" || strings.HasSuffix(provider, "_streaming") {
+			return nil, &api.UsageError{Msg: provider + " cannot re-run a transcript: choose a post-call provider such as meetstream (meetstream transcription providers)"}
+		}
 		return c.Transcribe(cmd.Context(), args[0], provider, language, callback)
 	})
 	cmd.GroupID = "meet"
-	cmd.Flags().StringVarP(&provider, "provider", "p", "deepgram", "transcription provider")
+	cmd.Flags().StringVar(&transcription, "transcription", "", "provider for this run (meetstream transcription providers); default: deepgram")
+	cmd.Flags().StringVarP(&provider, "provider", "p", "deepgram", "same as --transcription")
 	cmd.Flags().StringVarP(&language, "language", "l", "", "language")
 	cmd.Flags().StringVarP(&callback, "callback", "c", "", "callback URL")
 	return cmd

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+	"unicode"
 
 	"github.com/meetstream-ai/cli/internal/api"
 	"github.com/spf13/cobra"
@@ -85,8 +87,9 @@ func newMiaApplyCmd() *cobra.Command {
 		var body map[string]any
 		// YAML is a superset of JSON, so one parser reads both mia.yaml and mia.json.
 		if yaml.Unmarshal(b, &body) != nil || body == nil {
-			return usageErr("the config file must be a YAML or JSON object", "see: meetstream mia get <id> --json for the shape")
+			return usageErr("the config file must be a YAML or JSON object", "write the create body (agent_name, mode, model, voice, transcriber), or save: meetstream mia get <id> --json")
 		}
+		body = miaRequestBody(body)
 		id := first(body, "agent_config_id", "id")
 		if id != "" {
 			body["agent_config_id"] = id
@@ -114,4 +117,48 @@ func newMiaApplyCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("file")
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print request body without sending")
 	return cmd
+}
+
+// miaReadOnly are record fields that GET /mia returns and POST/PUT do not take.
+var miaReadOnly = map[string]bool{"user_id": true, "created_at": true, "updated_at": true, "audio": true}
+
+// miaRequestBody turns a saved `mia get --json` answer ({"agent_config": {...}}
+// with PascalCase keys such as AgentName and Model) into the snake_case body
+// that POST/PUT /mia read. A body already in that shape passes through. Only
+// top-level keys change: the blocks inside (model, voice, ...) are snake_case
+// in both.
+func miaRequestBody(body map[string]any) map[string]any {
+	if inner, ok := body["agent_config"].(map[string]any); ok && len(body) == 1 {
+		body = inner
+	}
+	out := map[string]any{}
+	for k, v := range body {
+		if k == "" || !unicode.IsUpper(rune(k[0])) {
+			out[k] = v
+		}
+	}
+	for k, v := range body {
+		if k == "" || !unicode.IsUpper(rune(k[0])) {
+			continue
+		}
+		sk := snakeCase(k)
+		if _, set := out[sk]; set || miaReadOnly[sk] || v == nil {
+			continue // a snake_case key in the file wins; read-only and null fields are dropped
+		}
+		out[sk] = v
+	}
+	return out
+}
+
+// snakeCase is AgentConfigID -> agent_config_id, WakeWord -> wake_word.
+func snakeCase(s string) string {
+	r := []rune(s)
+	var b strings.Builder
+	for i, c := range r {
+		if unicode.IsUpper(c) && i > 0 && (unicode.IsLower(r[i-1]) || (i+1 < len(r) && unicode.IsLower(r[i+1]) && unicode.IsUpper(r[i-1]))) {
+			b.WriteByte('_')
+		}
+		b.WriteRune(unicode.ToLower(c))
+	}
+	return b.String()
 }
