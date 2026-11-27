@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // Scenario is one scripted bot run.
@@ -22,6 +24,8 @@ type Scenario struct {
 	TranscriptFails bool
 	// ZoomNeedsSetup rejects Zoom links at create_bot, as an account with no Zoom app.
 	ZoomNeedsSetup bool
+	// Lines replaces the spoken lines (live transcript), for example to say trigger words.
+	Lines [][2]string
 }
 
 // Scenarios are the runs `meetstream mock --scenario` offers.
@@ -31,6 +35,10 @@ var Scenarios = map[string]Scenario{
 	"transcript-failed":    {Name: "transcript-failed", Description: "the meeting records, then the transcript fails (exit 4 path)", End: "bot.stopped", TranscriptFails: true},
 	"bot-removed":          {Name: "bot-removed", Description: "a participant removes the bot (bot.kicked)", End: "bot.kicked"},
 	"zoom-needs-setup":     {Name: "zoom-needs-setup", Description: "Zoom links are rejected: the account has no Zoom app set up", End: "bot.stopped", ZoomNeedsSetup: true},
+	"agent-controls": {Name: "agent-controls", Description: "a longer meeting whose speakers ask the bot to take a screenshot, pause and resume the recording", End: "bot.stopped",
+		Lines: [][2]string{{"Jane Smith", "Hi everyone, thanks for joining the design review."}, {"Ravi Kumar", "Bot, please take a screenshot of this slide."},
+			{"Jane Smith", "Let's pause the recording while we discuss salaries."}, {"Ana Lopez", "Okay, we can resume the recording now."},
+			{"Jane Smith", "Can everyone hear me? Last item is the launch date."}}},
 }
 
 // ScenarioNames is the sorted scenario list.
@@ -52,6 +60,13 @@ type bot struct {
 	TranscriptState                                     string // "", processing, completed, failed
 	AudioStatus                                         string // "", Success (as /detail reports it)
 	Created                                             time.Time
+	LiveMode                                            string // transcription_mode of the streaming provider
+	AgentID, Prompt, ControlURL, AudioURL               string
+	Params                                              map[string]any
+	Paused                                              bool
+	Chats                                               []string
+	Shots                                               []map[string]any
+	Control                                             *wsConn
 }
 
 // Server is the mock API. Step is the time between lifecycle events.
@@ -67,6 +82,9 @@ type Server struct {
 	seq    int
 	client *http.Client
 	ctx    context.Context
+	// journal is every request and socket message, for GET /__mock/journal (tests read it).
+	journal []Entry
+	agents  map[string]*agentConfig
 }
 
 // New returns a server for the scenario. ctx stops the scripted runs.
@@ -74,7 +92,7 @@ func New(ctx context.Context, sc Scenario, step time.Duration) *Server {
 	if step <= 0 {
 		step = 2 * time.Second
 	}
-	return &Server{Scenario: sc, Step: step, bots: map[string]*bot{}, client: &http.Client{Timeout: 10 * time.Second}, ctx: ctx}
+	return &Server{Scenario: sc, Step: step, bots: map[string]*bot{}, agents: map[string]*agentConfig{}, client: &http.Client{Timeout: 10 * time.Second}, ctx: ctx}
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -91,18 +109,25 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // ServeHTTP routes the subset of the API the CLI and the templates use.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/__mock/journal" {
+		writeJSON(w, 200, map[string]any{"entries": s.Journal()})
+		return
+	}
 	if !strings.HasPrefix(r.Header.Get("Authorization"), "Token ") {
 		writeJSON(w, 401, map[string]any{"detail": "Authentication credentials were not provided."})
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1")
 	s.logf("%s %s", r.Method, path)
+	s.record(r, path)
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	switch {
 	case r.Method == http.MethodPost && path == "/bots/create_bot":
 		s.createBot(w, r)
 	case r.Method == http.MethodGet && path == "/bots":
 		s.listBots(w)
+	case path == "/mia":
+		s.mia(w, r)
 	case r.Method == http.MethodGet && path == "/billing/balance":
 		writeJSON(w, 200, map[string]any{"balance": 25.0, "currency": "USD", "note": "mock balance"})
 	case len(parts) == 3 && parts[0] == "bots":
@@ -151,10 +176,20 @@ func (s *Server) createBot(w http.ResponseWriter, r *http.Request) {
 	}
 	cb, _ := payload["callback_url"].(string)
 	name, _ := payload["bot_name"].(string)
+	agentID, _ := payload["agent_config_id"].(string)
+	params, _ := payload["agent_config_params"].(map[string]any)
+	ctrl, _ := payload["socket_connection_url"].(map[string]any)
+	aud, _ := payload["live_audio_required"].(map[string]any)
 	s.mu.Lock()
+	if agentID != "" && s.agents[agentID] == nil {
+		s.mu.Unlock()
+		writeJSON(w, 400, map[string]any{"message": "Invalid agent_config_id: " + agentID + " does not exist"})
+		return
+	}
 	s.seq++
 	id := fmt.Sprintf("mock-%04d-%s", s.seq, time.Now().Format("150405"))
-	b := &bot{ID: id, Name: name, Link: link, Status: "Joining", Provider: provider, Callback: cb, LiveURL: live, Created: time.Now()}
+	b := &bot{ID: id, Name: name, Link: link, Status: "Joining", Provider: provider, Callback: cb, LiveURL: live, Created: time.Now(),
+		LiveMode: liveModeOf(payload), AgentID: agentID, Params: params, ControlURL: str(ctrl, "websocket_url"), AudioURL: str(aud, "websocket_url")}
 	s.bots[id] = b
 	s.order = append(s.order, id)
 	s.mu.Unlock()
@@ -236,6 +271,16 @@ func (s *Server) botRoute(w http.ResponseWriter, r *http.Request, id, action str
 			return
 		}
 		s.getTranscript(w, snap.TranscriptID)
+	case "send_message", "send_image", "send_command", "update_mia", "pause_recording", "resume_recording":
+		if r.Method != http.MethodPost {
+			writeJSON(w, 405, map[string]any{"error": "use POST"})
+			return
+		}
+		s.command(w, r, b, action)
+	case "get_chats":
+		s.chats(w, b)
+	case "screenshots":
+		s.screenshots(w, b)
 	case "remove_bot":
 		s.mu.Lock()
 		b.Status = "Stopped"
@@ -353,15 +398,54 @@ func (s *Server) run(b *bot) {
 		return
 	}
 	ev("bot.inmeeting", "bot.inmeeting", "InMeeting", "Bot is in the meeting", 200)
+	var ctrl, audio *wsConn
+	if b.ControlURL != "" {
+		if ctrl = s.dial(b, b.ControlURL, "control"); ctrl != nil {
+			s.mu.Lock()
+			b.Control = ctrl
+			s.mu.Unlock()
+			ctrl.send(map[string]any{"type": "ready", "playback_feedback": true, "bot_id": b.ID, "message": "Ready to receive messages"})
+			go s.readControl(b, ctrl)
+			ctrl.send(map[string]any{"command": "meeting_ready", "bot_id": b.ID})
+		}
+	}
+	defer func() {
+		for _, c := range []*wsConn{ctrl, audio} {
+			if c != nil {
+				_ = c.c.Close(websocket.StatusNormalClosure, "bot left the meeting")
+			}
+		}
+	}()
 	if !s.sleep(s.Step) {
 		return
 	}
 	ev("bot.recording", "bot.recording", "Recording", "Recording started", 200)
-	for i, l := range liveLines {
+	if b.AudioURL != "" {
+		if audio = s.dial(b, b.AudioURL, "audio"); audio != nil {
+			audio.send(map[string]any{"type": "ready", "bot_id": b.ID, "message": "Ready to send audio chunks"})
+			go s.streamAudio(b, audio, 100)
+		}
+	}
+	if b.AgentID != "" {
+		go s.callFunctions(b)
+	}
+	lines := liveLines
+	if len(sc.Lines) > 0 {
+		lines = sc.Lines
+	}
+	for i, l := range lines {
 		if b.LiveURL != "" {
-			s.send(b.LiveURL, LiveSegment(b.ID, l[0], fmt.Sprint(16778240+i%3), l[1], i+1))
+			for _, p := range livePosts(b.ID, l[0], fmt.Sprint(16778240+i%3), l[1], i+1, b.LiveMode) {
+				s.send(b.LiveURL, p)
+			}
 		}
 		if !s.sleep(s.Step / 2) {
+			return
+		}
+	}
+	// Agent and bridge bots stay longer, so apps have time to act during the meeting.
+	if b.AgentID != "" || b.ControlURL != "" || b.AudioURL != "" || len(sc.Lines) > 0 {
+		if !s.sleep(6 * s.Step) {
 			return
 		}
 	}
