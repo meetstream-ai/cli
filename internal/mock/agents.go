@@ -15,6 +15,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -323,11 +324,21 @@ func (s *Server) mia(w http.ResponseWriter, r *http.Request) {
 			msg(404, "Agent configuration not found.")
 			return
 		}
+		merged := map[string]any{}
+		for k, v := range ac.Raw {
+			merged[k] = v
+		}
 		for _, k := range []string{"agent_name", "mode", "model", "voice", "transcriber", "agent", "wake_word", "audio"} {
 			if v, ok := b[k]; ok {
-				ac.Raw[k] = v // each block is replaced whole, as production does
+				merged[k] = v // each block is replaced whole, as production does
 			}
 		}
+		if m := validateFunctions(merged); m != "" { // production validates custom_functions whenever present
+			s.mu.Unlock()
+			msg(400, m)
+			return
+		}
+		ac.Raw = merged
 		ac.Record = pascal(ac.Raw, cid)
 		rec := ac.Record
 		s.mu.Unlock()
@@ -694,7 +705,18 @@ func (s *Server) callFunctions(b *bot) {
 			raw, _ := json.Marshal(payload)
 			body = bytes.NewReader(raw)
 		}
-		req, err := http.NewRequestWithContext(s.ctx, method, str(f, "url"), body)
+		if validateFunctions(map[string]any{"custom_functions": []any{f}}) != "" {
+			continue // only https or loopback URLs, checked again right before the call
+		}
+		target := str(f, "url")
+		// MEETSTREAM_MOCK_TOOL_REWRITE="https://public.example=http://127.0.0.1:8080" stands in for the
+		// tunnel: an app registers its public https URL and the mock calls the local server behind it.
+		if rw := os.Getenv("MEETSTREAM_MOCK_TOOL_REWRITE"); rw != "" {
+			if from, to, ok := strings.Cut(rw, "="); ok && strings.HasPrefix(target, from) {
+				target = to + strings.TrimPrefix(target, from)
+			}
+		}
+		req, err := http.NewRequestWithContext(s.ctx, method, target, body)
 		if err != nil {
 			continue
 		}

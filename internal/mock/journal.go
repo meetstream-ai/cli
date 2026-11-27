@@ -27,7 +27,35 @@ func (s *Server) record(r *http.Request, path string) {
 			body = string(raw)
 		}
 	}
-	s.journalAdd(Entry{Kind: "http", Method: r.Method, Path: path, Body: body})
+	s.journalAdd(Entry{Kind: "http", Method: r.Method, Path: path, Body: redact(body, false)})
+}
+
+// redact hides api_key values and the header values of custom functions in journal entries.
+func redact(v any, inHeaders bool) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			switch {
+			case inHeaders:
+				out[k] = "[redacted]"
+			case k == "api_key" || k == "apiKey":
+				out[k] = "[redacted]"
+			case k == "headers":
+				out[k] = redact(x, true)
+			default:
+				out[k] = redact(x, false)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = redact(x, inHeaders)
+		}
+		return out
+	}
+	return v
 }
 
 func (s *Server) journalAdd(e Entry) {
@@ -41,5 +69,5 @@ func (s *Server) journalAdd(e Entry) {
 func (s *Server) Journal() []Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]Entry(nil), s.journal...)
+	return append([]Entry{}, s.journal...) // [] (not null) when empty
 }

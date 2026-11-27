@@ -109,12 +109,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // ServeHTTP routes the subset of the API the CLI and the templates use.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/__mock/journal" {
-		writeJSON(w, 200, map[string]any{"entries": s.Journal()})
+	// Loopback Host only: blocks DNS rebinding from a web page to this local server.
+	if h := r.Host; !(strings.HasPrefix(h, "127.0.0.1") || strings.HasPrefix(h, "localhost") || strings.HasPrefix(h, "[::1]")) {
+		writeJSON(w, 403, map[string]any{"detail": "the mock answers only on 127.0.0.1 or localhost"})
 		return
 	}
 	if !strings.HasPrefix(r.Header.Get("Authorization"), "Token ") {
 		writeJSON(w, 401, map[string]any{"detail": "Authentication credentials were not provided."})
+		return
+	}
+	if r.URL.Path == "/__mock/journal" {
+		writeJSON(w, 200, map[string]any{"entries": s.Journal()})
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1")
